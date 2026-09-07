@@ -1,0 +1,1339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GridPulse — Electricity Markets, Understood</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  :root{
+    --ink:#0B1220; --surface:#121B2C; --surface2:#182338; --border:#243349;
+    --text:#E9EEF6; --text-dim:#8FA0B8; --accent:#E8A33D; --accent-ink:#2A1B04;
+    --signal:#3FA796; --positive:#3FA796; --negative:#E1615B; --warning:#E8A33D;
+  }
+  html.light{
+    --ink:#F5F3EC; --surface:#FFFFFF; --surface2:#FBFAF6; --border:#E4DFD1;
+    --text:#1C2230; --text-dim:#66707F; --accent:#B9750F; --accent-ink:#FFF7E8;
+    --signal:#2C7A6E; --positive:#2C7A6E; --negative:#C6413B; --warning:#B9750F;
+  }
+  *{ box-sizing:border-box; }
+  body{ background:var(--ink); color:var(--text); font-family:'Inter',sans-serif; transition:background .2s ease,color .2s ease; }
+  .font-display{ font-family:'Space Grotesk',sans-serif; }
+  .font-mono{ font-family:'JetBrains Mono',monospace; }
+  .bg-ink{background:var(--ink);} .bg-surface{background:var(--surface);} .bg-surface2{background:var(--surface2);}
+  .border-hair{border-color:var(--border);}
+  .text-dim{color:var(--text-dim);}
+  .text-accent{color:var(--accent);}
+  .text-signal{color:var(--signal);}
+  .text-pos{color:var(--positive);}
+  .text-neg{color:var(--negative);}
+  .bg-accent{background:var(--accent); color:var(--accent-ink);}
+  ::-webkit-scrollbar{ width:8px; height:8px; }
+  ::-webkit-scrollbar-thumb{ background:var(--border); border-radius:4px; }
+  ::-webkit-scrollbar-track{ background:transparent; }
+  .card{ background:var(--surface); border:1px solid var(--border); border-radius:14px; }
+  .hairline{ border-bottom:1px solid var(--border); }
+  .pulse-dot{ box-shadow:0 0 0 0 rgba(63,167,150,.55); animation:pulse 2.2s infinite; }
+  @keyframes pulse{
+    0%{ box-shadow:0 0 0 0 rgba(63,167,150,.5); }
+    70%{ box-shadow:0 0 0 9px rgba(63,167,150,0); }
+    100%{ box-shadow:0 0 0 0 rgba(63,167,150,0); }
+  }
+  .skeleton{ background:linear-gradient(90deg,var(--surface2) 25%,var(--border) 37%,var(--surface2) 63%); background-size:400% 100%; animation:sk 1.4s ease infinite; border-radius:8px; }
+  @keyframes sk{ 0%{background-position:100% 50%;} 100%{background-position:0 50%;} }
+  .toast-enter{ animation:toastIn .25s ease; }
+  @keyframes toastIn{ from{ opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);} }
+  input[type=range]{ accent-color:var(--accent); }
+  .no-scrollbar::-webkit-scrollbar{ display:none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect, useMemo, useRef, createContext, useContext } = React;
+const { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, LineChart, Line } = Recharts;
+
+/* ============================= ICONS ============================= */
+const Icon = ({ path, className="w-4 h-4", strokeW=1.8 }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeW} strokeLinecap="round" strokeLinejoin="round" className={className}>{path}</svg>
+);
+const I = {
+  bolt: <Icon path={<path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/>} />,
+  search: <Icon path={<><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></>} />,
+  bell: <Icon path={<><path d="M6 8a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 21a2 2 0 0 0 4 0"/></>} />,
+  sun: <Icon path={<><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></>} />,
+  moon: <Icon path={<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/>} />,
+  star: <Icon path={<path d="m12 3 2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.9 6.1 21l1.2-6.5L2.5 9.9l6.6-.9L12 3Z"/>} />,
+  starFilled: <Icon path={<path d="m12 3 2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.9 6.1 21l1.2-6.5L2.5 9.9l6.6-.9L12 3Z" fill="currentColor"/>} />,
+  up: <Icon path={<path d="M6 15 12 9l6 6"/>} />,
+  down: <Icon path={<path d="M6 9l6 6 6-6"/>} />,
+  menu: <Icon path={<><path d="M3 6h18M3 12h18M3 18h18"/></>} />,
+  close: <Icon path={<><path d="M18 6 6 18M6 6l12 12"/></>} />,
+  chevronR: <Icon path={<path d="m9 6 6 6-6 6"/>} />,
+  plus: <Icon path={<path d="M12 5v14M5 12h14"/>} />,
+  grid: <Icon path={<><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>} />,
+  chart: <Icon path={<><path d="M3 3v18h18"/><path d="M7 15l4-6 3 3 5-8"/></>} />,
+  wallet: <Icon path={<><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20"/><circle cx="17" cy="14" r="1.4" fill="currentColor" stroke="none"/></>} />,
+  book: <Icon path={<><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></>} />,
+  building: <Icon path={<><rect x="4" y="3" width="16" height="18" rx="1"/><path d="M9 8h.01M15 8h.01M9 12h.01M15 12h.01M9 16h.01M15 16h.01"/></>} />,
+  shield: <Icon path={<path d="M12 2 4 5v6c0 5 3.5 8.5 8 11 4.5-2.5 8-6 8-11V5l-8-3Z"/>} />,
+  x: <Icon path={<><path d="M18 6 6 18M6 6l12 12"/></>} />,
+  arrowRight: <Icon path={<><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></>} />,
+  info: <Icon path={<><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></>} />,
+  trash: <Icon path={<><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></>} />,
+};
+
+/* ============================= DEMO DATA ENGINE ============================= */
+function hashSeed(str){ let h=0; for(let i=0;i<str.length;i++){ h=(Math.imul(31,h)+str.charCodeAt(i))|0; } return h; }
+function mulberry32(seed){
+  return function(){
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = (t + Math.imul(t ^ t >>> 7, 61 | t)) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+const MARKET_DEFS = [
+  { id:"de", name:"Germany", label:"Germany Day-Ahead", currency:"€", base:118, renewShare:0.62 },
+  { id:"fr", name:"France",  label:"France Day-Ahead",  currency:"€", base:94,  renewShare:0.38 },
+  { id:"es", name:"Spain",   label:"Spain Day-Ahead",   currency:"€", base:79,  renewShare:0.55 },
+  { id:"gb", name:"United Kingdom", label:"UK Day-Ahead", currency:"£", base:108, renewShare:0.44 },
+  { id:"it", name:"Italy",   label:"Italy Day-Ahead",   currency:"€", base:131, renewShare:0.33 },
+  { id:"no", name:"Nordics", label:"Nordics Day-Ahead", currency:"€", base:44,  renewShare:0.86 },
+  { id:"nl", name:"Netherlands", label:"Netherlands Day-Ahead", currency:"€", base:113, renewShare:0.41 },
+  { id:"pl", name:"Poland",  label:"Poland Day-Ahead",  currency:"€", base:142, renewShare:0.21 },
+];
+
+function generateSeries(def, hours=168){
+  const rnd = mulberry32(hashSeed(def.id + "-gridpulse-v1"));
+  const series = [];
+  let walk = 0;
+  const now = Date.now();
+  for(let h=hours-1; h>=0; h--){
+    const t = now - h*3600*1000;
+    const hourOfDay = new Date(t).getHours();
+    // solar dip mid-day, scaled by renewable share
+    const solarDip = def.renewShare * 0.5 * Math.max(0, Math.sin(Math.PI*(hourOfDay-6)/12)) * (hourOfDay>6 && hourOfDay<19 ? 1:0);
+    // evening peak
+    const eveningPeak = (hourOfDay>=17 && hourOfDay<=21) ? 0.30*Math.exp(-Math.pow(hourOfDay-19,2)/3) : 0;
+    // night trough
+    const nightDip = (hourOfDay>=1 && hourOfDay<=5) ? 0.18 : 0;
+    walk += (rnd()-0.5)*0.06;
+    walk = Math.max(-0.35, Math.min(0.35, walk));
+    const noise = (rnd()-0.5)*0.08;
+    let mult = 1 - solarDip + eveningPeak - nightDip + walk + noise;
+    let price = def.base * mult;
+    // occasional negative-price event for high-renewable markets
+    if(def.renewShare>0.5 && hourOfDay>=11 && hourOfDay<=14 && rnd()<0.06){ price = -Math.abs(price*0.15) - rnd()*8; }
+    series.push({ t, price: Math.round(price*100)/100, hour: hourOfDay });
+  }
+  return series;
+}
+
+function stdev(arr){
+  if(arr.length<2) return 0;
+  const m = arr.reduce((a,b)=>a+b,0)/arr.length;
+  const v = arr.reduce((a,b)=>a+Math.pow(b-m,2),0)/arr.length;
+  return Math.sqrt(v);
+}
+
+function buildMarket(def){
+  const series = generateSeries(def);
+  const last = series[series.length-1];
+  const prev24 = series[series.length-25] || series[0];
+  const first = series[0];
+  const today = series.slice(-24);
+  const last48 = series.slice(-48).map(p=>p.price);
+  const returns = [];
+  for(let i=1;i<last48.length;i++){ returns.push((last48[i]-last48[i-1])); }
+  const volatility = Math.round(stdev(returns)*10)/10;
+  const todayHigh = Math.max(...today.map(p=>p.price));
+  const todayLow = Math.min(...today.map(p=>p.price));
+  const avg = Math.round((today.reduce((a,p)=>a+p.price,0)/today.length)*100)/100;
+  const change24 = prev24.price!==0 ? ((last.price-prev24.price)/Math.abs(prev24.price))*100 : 0;
+  const change7d = first.price!==0 ? ((last.price-first.price)/Math.abs(first.price))*100 : 0;
+  const cheapest = today.reduce((a,b)=> b.price<a.price? b:a, today[0]);
+  const priciest = today.reduce((a,b)=> b.price>a.price? b:a, today[0]);
+  const rnd = mulberry32(hashSeed(def.id+"-drivers"));
+  const drivers = {
+    demand: Math.round((rnd()*20-6)*10)/10,
+    solar: Math.round((rnd()*40-8)*10)/10,
+    wind: Math.round((rnd()*30-10)*10)/10,
+    temperature: Math.round(rnd()*14+2),
+    gas: Math.round((rnd()*10-4)*10)/10,
+    gridStatus: volatility>9 ? "Tight" : volatility>5 ? "Normal" : "Comfortable",
+  };
+  return {
+    ...def, series, current: last.price, change24, change7d, volatility, todayHigh, todayLow, avg,
+    prevClose: prev24.price, cheapest, priciest, drivers,
+    ath: Math.round(Math.max(...series.map(p=>p.price))*1.32*100)/100,
+    atl: Math.round(Math.min(...series.map(p=>p.price))*0.55*100)/100,
+    lastUpdated: new Date(last.t),
+  };
+}
+
+const MARKETS = MARKET_DEFS.map(buildMarket);
+
+/* ============================= HELPERS ============================= */
+function fmt(n, currency="€"){
+  if(n===undefined||n===null||isNaN(n)) return "—";
+  const sign = n<0 ? "-" : "";
+  return `${sign}${currency}${Math.abs(n).toFixed(2)}`;
+}
+function fmtPct(n){
+  if(n===undefined||n===null||isNaN(n)) return "—";
+  return `${n>=0?"+":""}${n.toFixed(1)}%`;
+}
+function timeAgo(d){
+  const s = Math.floor((Date.now()-d.getTime())/1000);
+  if(s<60) return "just now";
+  if(s<3600) return `${Math.floor(s/60)}m ago`;
+  return `${Math.floor(s/3600)}h ago`;
+}
+function hourLabel(h){ return `${String(h).padStart(2,"0")}:00`; }
+
+/* ============================= APP STATE ============================= */
+const AppCtx = createContext(null);
+function useApp(){ return useContext(AppCtx); }
+
+function useHashRoute(){
+  const [route, setRoute] = useState(window.location.hash || "#/");
+  useEffect(()=>{
+    const fn = ()=> setRoute(window.location.hash || "#/");
+    window.addEventListener("hashchange", fn);
+    return ()=> window.removeEventListener("hashchange", fn);
+  },[]);
+  return route;
+}
+function nav(path){ window.location.hash = path; window.scrollTo({top:0, behavior:"smooth"}); }
+
+/* ============================= SHARED UI ============================= */
+function Sparkline({ data, positive }){
+  const points = data.map(d=>d.price);
+  const w=100,h=32, min=Math.min(...points), max=Math.max(...points), range=(max-min)||1;
+  const path = points.map((p,i)=>{
+    const x = (i/(points.length-1))*w;
+    const y = h - ((p-min)/range)*h;
+    return `${i===0?"M":"L"}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-8" preserveAspectRatio="none">
+      <path d={path} fill="none" stroke={positive?"var(--positive)":"var(--negative)"} strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+function ChangeTag({ value, size="sm" }){
+  const pos = value>=0;
+  const cls = size==="sm" ? "text-xs px-1.5 py-0.5" : "text-sm px-2 py-1";
+  return (
+    <span className={`inline-flex items-center gap-0.5 rounded-md font-mono font-medium ${cls} ${pos?"text-pos":"text-neg"}`} style={{background: pos? "rgba(63,167,150,.12)":"rgba(225,97,91,.12)"}}>
+      {pos ? React.cloneElement(I.up,{className:"w-3 h-3"}) : React.cloneElement(I.down,{className:"w-3 h-3"})}
+      {fmtPct(value)}
+    </span>
+  );
+}
+
+function Tag({children, tone="default"}){
+  const tones = {
+    default: "text-dim border-hair",
+    accent: "text-accent", 
+    pos: "text-pos",
+    neg: "text-neg",
+  };
+  return <span className={`text-[11px] font-mono uppercase tracking-wide border rounded-full px-2 py-0.5 ${tones[tone]} border-hair`}>{children}</span>;
+}
+
+function Toast({ toasts }){
+  return (
+    <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-sm">
+      {toasts.map(t=>(
+        <div key={t.id} className="toast-enter card px-4 py-3 shadow-xl flex items-start gap-2">
+          <span className="text-accent mt-0.5">{I.bell}</span>
+          <span className="text-sm">{t.msg}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EmptyState({ title, sub, cta, onCta }){
+  return (
+    <div className="text-center py-14 px-6">
+      <p className="font-display text-lg mb-1">{title}</p>
+      <p className="text-dim text-sm mb-5">{sub}</p>
+      {cta && <button onClick={onCta} className="bg-accent px-4 py-2 rounded-lg text-sm font-medium">{cta}</button>}
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, wide }){
+  return (
+    <div className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4" onClick={onClose}>
+      <div className={`card w-full ${wide?"sm:max-w-xl":"sm:max-w-md"} rounded-t-2xl sm:rounded-2xl max-h-[88vh] overflow-y-auto`} onClick={e=>e.stopPropagation()}>
+        <div className="hairline px-5 py-4 flex items-center justify-between sticky top-0 bg-surface">
+          <h3 className="font-display text-lg">{title}</h3>
+          <button onClick={onClose} className="text-dim hover:text-current">{I.close}</button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================= NAV ============================= */
+function TopNav({ theme, toggleTheme, mobileOpen, setMobileOpen }){
+  const links = [
+    {href:"#/markets", label:"Markets"},
+    {href:"#/dashboard", label:"Dashboard"},
+    {href:"#/trade", label:"Trade"},
+    {href:"#/portfolio", label:"Portfolio"},
+    {href:"#/learn", label:"Learn"},
+    {href:"#/business", label:"For Business"},
+  ];
+  return (
+    <header className="sticky top-0 z-50 backdrop-blur bg-ink/85 hairline">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+        <div className="flex items-center gap-8">
+          <a href="#/" className="flex items-center gap-2 shrink-0">
+            <span className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center">{React.cloneElement(I.bolt,{className:"w-4 h-4"})}</span>
+            <span className="font-display font-semibold text-lg tracking-tight">GridPulse</span>
+          </a>
+          <nav className="hidden lg:flex items-center gap-6">
+            {links.map(l=> <a key={l.href} href={l.href} className="text-sm text-dim hover:text-current transition-colors">{l.label}</a>)}
+          </nav>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={()=>nav("#/markets")} className="hidden sm:flex items-center gap-2 text-dim text-sm border border-hair rounded-lg px-3 py-1.5 hover:text-current">
+            {I.search}<span>Search markets</span>
+          </button>
+          <button onClick={toggleTheme} className="w-9 h-9 flex items-center justify-center rounded-lg border border-hair text-dim hover:text-current" aria-label="Toggle theme">
+            {theme==="dark" ? I.sun : I.moon}
+          </button>
+          <button onClick={()=>nav("#/dashboard")} className="hidden sm:block bg-accent text-sm font-medium px-4 py-2 rounded-lg">Get Started</button>
+          <button className="lg:hidden w-9 h-9 flex items-center justify-center rounded-lg border border-hair" onClick={()=>setMobileOpen(!mobileOpen)}>
+            {mobileOpen ? I.close : I.menu}
+          </button>
+        </div>
+      </div>
+      {mobileOpen && (
+        <div className="lg:hidden hairline px-4 pb-4 flex flex-col gap-1">
+          {links.map(l=> <a key={l.href} href={l.href} onClick={()=>setMobileOpen(false)} className="py-2.5 text-sm text-dim hover:text-current border-b border-hair">{l.label}</a>)}
+          <button onClick={()=>{nav("#/dashboard");setMobileOpen(false);}} className="mt-3 bg-accent text-sm font-medium px-4 py-2 rounded-lg">Get Started</button>
+        </div>
+      )}
+    </header>
+  );
+}
+
+function MobileTabBar(){
+  const items = [
+    {href:"#/", label:"Home", icon:I.bolt},
+    {href:"#/markets", label:"Markets", icon:I.grid},
+    {href:"#/trade", label:"Trade", icon:I.chart},
+    {href:"#/portfolio", label:"Folio", icon:I.wallet},
+    {href:"#/dashboard", label:"More", icon:I.menu},
+  ];
+  return (
+    <div className="lg:hidden fixed bottom-0 inset-x-0 z-50 bg-surface hairline border-t flex justify-around py-2">
+      {items.map(it=>(
+        <a key={it.href} href={it.href} className="flex flex-col items-center gap-0.5 text-dim px-2">
+          {React.cloneElement(it.icon,{className:"w-5 h-5"})}
+          <span className="text-[10px]">{it.label}</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function Footer(){
+  return (
+    <footer className="hairline border-t mt-24">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-12 grid sm:grid-cols-4 gap-8">
+        <div className="sm:col-span-2">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">{React.cloneElement(I.bolt,{className:"w-3.5 h-3.5"})}</span>
+            <span className="font-display font-semibold">GridPulse</span>
+          </div>
+          <p className="text-dim text-sm max-w-sm">Electricity market data, explained simply, and sized for one person instead of one utility company.</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-dim mb-3 font-mono">Product</p>
+          <div className="flex flex-col gap-2 text-sm text-dim">
+            <a href="#/markets" className="hover:text-current">Markets</a>
+            <a href="#/trade" className="hover:text-current">Paper Trading</a>
+            <a href="#/business" className="hover:text-current">For Business</a>
+            <a href="#/learn" className="hover:text-current">Learn</a>
+          </div>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-dim mb-3 font-mono">Data & Trust</p>
+          <div className="flex flex-col gap-2 text-sm text-dim">
+            <span>Demo market data</span>
+            <span>Simulation only, no real funds</span>
+            <span>Not financial advice</span>
+          </div>
+        </div>
+      </div>
+      <div className="hairline border-t">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-5 text-xs text-dim leading-relaxed">
+          GridPulse provides market information and simulation tools. Electricity prices can be highly volatile. Nothing on this platform is financial, investment, legal, or energy procurement advice, and all trading shown is simulated with demo funds only.
+        </div>
+      </div>
+    </footer>
+  );
+}
+
+/* ============================= LANDING PAGE ============================= */
+function HeroChart(){
+  const m = MARKETS[0];
+  const data = m.series.slice(-48).map(p=>({ t:p.t, price:p.price }));
+  return (
+    <div className="card p-5">
+      <div className="flex items-center justify-between mb-1">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-signal pulse-dot"></span>
+            <span className="text-xs text-dim font-mono uppercase tracking-wide">Demo Market Data</span>
+          </div>
+          <p className="font-display text-lg mt-1">{m.label}</p>
+        </div>
+        <ChangeTag value={m.change24} size="md" />
+      </div>
+      <p className="font-mono text-3xl mt-2 mb-4">{fmt(m.current, m.currency)}<span className="text-sm text-dim">/MWh</span></p>
+      <ResponsiveContainer width="100%" height={140}>
+        <AreaChart data={data} margin={{top:0,right:0,left:0,bottom:0}}>
+          <defs>
+            <linearGradient id="heroGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.35}/>
+              <stop offset="100%" stopColor="var(--accent)" stopOpacity={0}/>
+            </linearGradient>
+          </defs>
+          <Area type="monotone" dataKey="price" stroke="var(--accent)" strokeWidth={2} fill="url(#heroGrad)" isAnimationActive={false} />
+        </AreaChart>
+      </ResponsiveContainer>
+      <div className="flex justify-between text-xs text-dim mt-2 font-mono">
+        <span>48h</span><span>Updated {timeAgo(m.lastUpdated)}</span>
+      </div>
+    </div>
+  );
+}
+
+function Landing(){
+  const [glance, setGlance] = useState(MARKETS.slice(0,4));
+  return (
+    <div>
+      {/* HERO */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 pt-14 sm:pt-20 pb-16 grid lg:grid-cols-2 gap-12 items-center">
+        <div>
+          <div className="flex items-center gap-2 mb-5">
+            <Tag tone="accent">8 live markets · demo data</Tag>
+          </div>
+          <h1 className="font-display text-4xl sm:text-5xl leading-[1.08] tracking-tight mb-5">
+            Electricity prices,<br/>finally something<br/>you can actually read.
+          </h1>
+          <p className="text-dim text-lg max-w-md mb-8 leading-relaxed">
+            Track what power actually costs right now, understand why it's moving, and size a position or a hedge as small as a single kilowatt hour. No trading desk required.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <button onClick={()=>nav("#/markets")} className="bg-accent px-5 py-3 rounded-lg font-medium flex items-center gap-2">
+              Explore Markets {I.arrowRight}
+            </button>
+            <button onClick={()=>nav("#/learn")} className="border border-hair px-5 py-3 rounded-lg font-medium text-sm">How It Works</button>
+          </div>
+          <div className="flex gap-8 mt-10">
+            <div><p className="font-display text-2xl">1 kWh</p><p className="text-dim text-xs">smallest position size</p></div>
+            <div><p className="font-display text-2xl">8</p><p className="text-dim text-xs">markets tracked</p></div>
+            <div><p className="font-display text-2xl">24/7</p><p className="text-dim text-xs">price monitoring</p></div>
+          </div>
+        </div>
+        <HeroChart/>
+      </section>
+
+      {/* WHY IT MATTERS */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 py-16 hairline border-t">
+        <div className="grid lg:grid-cols-3 gap-10">
+          <div>
+            <p className="text-xs uppercase tracking-wide text-dim font-mono mb-3">Why it matters</p>
+            <h2 className="font-display text-2xl leading-tight mb-4">The price of power moves more than people realize.</h2>
+            <p className="text-dim text-sm leading-relaxed">Sun, wind, temperature, and demand push electricity prices around all day, sometimes swinging from a spike to nearly free within hours. Almost none of that movement is visible to the person actually paying the bill.</p>
+          </div>
+          <div className="lg:col-span-2 grid sm:grid-cols-2 gap-4">
+            {[
+              {label:"Demand", icon:I.chart, text:"More people drawing power at once pushes prices up, especially during evening peaks."},
+              {label:"Solar & wind", icon:I.sun, text:"A sunny, windy afternoon can flood the grid with cheap supply and drag prices down, sometimes below zero."},
+              {label:"Temperature", icon:I.info, text:"Heating and cooling load swings demand hard in both directions depending on the season."},
+              {label:"Grid conditions", icon:I.shield, text:"Constrained transmission or a plant outage can spike local prices even when nothing else changed."},
+            ].map(c=>(
+              <div key={c.label} className="card p-5">
+                <span className="text-accent mb-2 inline-block">{c.icon}</span>
+                <p className="font-medium text-sm mb-1">{c.label}</p>
+                <p className="text-dim text-xs leading-relaxed">{c.text}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* HOW IT WORKS */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 py-16 hairline border-t">
+        <p className="text-xs uppercase tracking-wide text-dim font-mono mb-3">How it works</p>
+        <h2 className="font-display text-2xl mb-10">From a confusing market to a position you understand, in four steps.</h2>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          {[
+            {n:"Choose a market", d:"Pick a region, Germany, Texas, the Nordics, wherever electricity pricing affects you."},
+            {n:"Understand the price", d:"See what's actually moving it today, in plain language, not just a number."},
+            {n:"Set your position", d:"Protect against a spike or take a small position, sized however small you like."},
+            {n:"Track the result", d:"Watch it play out on a simple portfolio view, no spreadsheet required."},
+          ].map((s,i)=>(
+            <div key={s.n} className="relative">
+              <p className="font-display text-3xl text-accent mb-3">{String(i+1).padStart(2,"0")}</p>
+              <p className="font-medium text-sm mb-1.5">{s.n}</p>
+              <p className="text-dim text-xs leading-relaxed">{s.d}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* MARKET SNAPSHOT */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 py-16 hairline border-t">
+        <div className="flex items-end justify-between mb-8">
+          <div>
+            <p className="text-xs uppercase tracking-wide text-dim font-mono mb-3">Market snapshot</p>
+            <h2 className="font-display text-2xl">A quick look across today's markets.</h2>
+          </div>
+          <a href="#/markets" className="text-sm text-accent hidden sm:flex items-center gap-1">View all {I.chevronR}</a>
+        </div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {glance.map(m=>(
+            <a href={`#/market/${m.id}`} key={m.id} className="card p-4 block hover:border-accent transition-colors">
+              <div className="flex items-center justify-between mb-2">
+                <p className="font-medium text-sm">{m.name}</p>
+                <ChangeTag value={m.change24} />
+              </div>
+              <p className="font-mono text-xl mb-2">{fmt(m.current, m.currency)}</p>
+              <Sparkline data={m.series.slice(-24)} positive={m.change24>=0} />
+            </a>
+          ))}
+        </div>
+      </section>
+
+      {/* FOR BUSINESS / FOR TRADERS */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 py-16 hairline border-t grid lg:grid-cols-2 gap-6">
+        <div className="card p-8">
+          <span className="text-accent mb-3 inline-block">{I.building}</span>
+          <h3 className="font-display text-xl mb-2">Running a business that eats power?</h3>
+          <p className="text-dim text-sm leading-relaxed mb-5">See what a price swing would actually cost you this month, and explore ways to soften the hit before it happens.</p>
+          <button onClick={()=>nav("#/business")} className="text-sm font-medium text-accent flex items-center gap-1">Estimate your exposure {I.arrowRight}</button>
+        </div>
+        <div className="card p-8">
+          <span className="text-accent mb-3 inline-block">{I.chart}</span>
+          <h3 className="font-display text-xl mb-2">Curious how far a small position could go?</h3>
+          <p className="text-dim text-sm leading-relaxed mb-5">Practice with a demo balance before anything real is on the line. Long or short, small stakes, real market shapes.</p>
+          <button onClick={()=>nav("#/trade")} className="text-sm font-medium text-accent flex items-center gap-1">Try paper trading {I.arrowRight}</button>
+        </div>
+      </section>
+
+      {/* TRUST */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 py-16 hairline border-t">
+        <div className="card p-8 grid sm:grid-cols-3 gap-8">
+          <div>
+            <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">Data</p>
+            <p className="text-sm leading-relaxed text-dim">This preview runs on seeded demo data shaped like real day-ahead markets. Anything not yet wired to a licensed feed is clearly labeled.</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">Trading</p>
+            <p className="text-sm leading-relaxed text-dim">Every position shown today is simulated with a demo balance. No real electricity or funds change hands.</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">Not advice</p>
+            <p className="text-sm leading-relaxed text-dim">Nothing here is financial, investment, or energy procurement advice. Markets are volatile and can move against you.</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 pb-24 text-center">
+        <h2 className="font-display text-3xl mb-5">Start exploring electricity markets.</h2>
+        <button onClick={()=>nav("#/markets")} className="bg-accent px-6 py-3 rounded-lg font-medium">Explore Markets</button>
+      </section>
+    </div>
+  );
+}
+
+/* ============================= MARKETS PAGE ============================= */
+function MarketsPage({ watchlist, toggleWatch }){
+  const [q, setQ] = useState("");
+  const [sortKey, setSortKey] = useState("change24");
+  const [sortDir, setSortDir] = useState("desc");
+  const filtered = useMemo(()=>{
+    let list = MARKETS.filter(m=> m.name.toLowerCase().includes(q.toLowerCase()));
+    list = [...list].sort((a,b)=> sortDir==="desc" ? b[sortKey]-a[sortKey] : a[sortKey]-b[sortKey]);
+    return list;
+  },[q, sortKey, sortDir]);
+
+  const setSort = (k)=>{
+    if(k===sortKey) setSortDir(d=> d==="desc"?"asc":"desc");
+    else { setSortKey(k); setSortDir("desc"); }
+  };
+
+  const Th = ({k, label, className}) => (
+    <th onClick={()=>setSort(k)} className={`text-left text-xs uppercase tracking-wide text-dim font-mono py-3 px-3 cursor-pointer select-none whitespace-nowrap ${className||""}`}>
+      {label}{sortKey===k && <span className="ml-1">{sortDir==="desc"?"↓":"↑"}</span>}
+    </th>
+  );
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10">
+      <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">Markets</p>
+      <h1 className="font-display text-3xl mb-2">Electricity Markets</h1>
+      <p className="text-dim mb-8">Track electricity prices across major markets, updated from demo data shaped like real day-ahead pricing.</p>
+
+      <div className="flex flex-col sm:flex-row gap-3 mb-6">
+        <div className="flex items-center gap-2 border border-hair rounded-lg px-3 py-2 flex-1 max-w-sm">
+          {I.search}
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search markets…" className="bg-transparent outline-none text-sm flex-1" />
+        </div>
+        <div className="flex gap-2 overflow-x-auto no-scrollbar">
+          {["change24","current","volatility"].map(k=>(
+            <button key={k} onClick={()=>setSort(k)} className={`text-xs px-3 py-2 rounded-lg border whitespace-nowrap ${sortKey===k?"bg-accent border-transparent":"border-hair text-dim"}`}>
+              {k==="change24"?"24h change":k==="current"?"Price":"Volatility"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Desktop table */}
+      <div className="hidden md:block card overflow-hidden">
+        <table className="w-full">
+          <thead className="hairline border-b">
+            <tr>
+              <th className="text-left text-xs uppercase tracking-wide text-dim font-mono py-3 px-3">Market</th>
+              <Th k="current" label="Price" />
+              <Th k="change24" label="24H" />
+              <Th k="change7d" label="7D" />
+              <Th k="volatility" label="Volatility" />
+              <th className="text-left text-xs uppercase tracking-wide text-dim font-mono py-3 px-3">7D chart</th>
+              <th className="text-left text-xs uppercase tracking-wide text-dim font-mono py-3 px-3">Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(m=>(
+              <tr key={m.id} className="hairline border-b last:border-0 hover:bg-surface2">
+                <td className="py-3 px-3">
+                  <a href={`#/market/${m.id}`} className="flex items-center gap-3">
+                    <span className="w-8 h-8 rounded-lg bg-surface2 border border-hair flex items-center justify-center text-xs font-mono">{m.id.toUpperCase()}</span>
+                    <div>
+                      <p className="text-sm font-medium">{m.label}</p>
+                      <p className="text-xs text-dim">{m.name}</p>
+                    </div>
+                  </a>
+                </td>
+                <td className="py-3 px-3 font-mono text-sm">{fmt(m.current, m.currency)}</td>
+                <td className="py-3 px-3"><ChangeTag value={m.change24} /></td>
+                <td className="py-3 px-3"><ChangeTag value={m.change7d} /></td>
+                <td className="py-3 px-3 font-mono text-sm text-dim">{m.volatility}</td>
+                <td className="py-3 px-3 w-28"><Sparkline data={m.series.filter((_,i)=>i%3===0)} positive={m.change7d>=0} /></td>
+                <td className="py-3 px-3"><Tag tone={m.drivers.gridStatus==="Tight"?"neg":"default"}>{m.drivers.gridStatus}</Tag></td>
+                <td className="py-3 px-3">
+                  <button onClick={()=>toggleWatch(m.id)} className={watchlist.includes(m.id)?"text-accent":"text-dim"}>
+                    {watchlist.includes(m.id)?I.starFilled:I.star}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Mobile cards */}
+      <div className="md:hidden flex flex-col gap-3">
+        {filtered.map(m=>(
+          <a href={`#/market/${m.id}`} key={m.id} className="card p-4 block">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <p className="text-sm font-medium">{m.label}</p>
+                <p className="text-xs text-dim">{m.name}</p>
+              </div>
+              <button onClick={(e)=>{e.preventDefault(); toggleWatch(m.id);}} className={watchlist.includes(m.id)?"text-accent":"text-dim"}>
+                {watchlist.includes(m.id)?I.starFilled:I.star}
+              </button>
+            </div>
+            <div className="flex items-center justify-between">
+              <p className="font-mono text-lg">{fmt(m.current, m.currency)}</p>
+              <ChangeTag value={m.change24} />
+            </div>
+            <div className="mt-2"><Sparkline data={m.series.slice(-24)} positive={m.change24>=0} /></div>
+          </a>
+        ))}
+        {filtered.length===0 && <EmptyState title="No markets found" sub="Try a different search term." />}
+      </div>
+    </div>
+  );
+}
+
+/* ============================= MARKET DETAIL PAGE ============================= */
+const RANGES = [
+  {k:"1D", h:24}, {k:"3D", h:72}, {k:"1W", h:168},
+];
+function MarketDetail({ id, watchlist, toggleWatch, openAlertModal, goTrade }){
+  const m = MARKETS.find(x=>x.id===id) || MARKETS[0];
+  const [range, setRange] = useState("1W");
+  const rangeHours = RANGES.find(r=>r.k===range).h;
+  const data = m.series.slice(-rangeHours).map(p=>({ t:p.t, price:p.price, label: new Date(p.t).toLocaleString([], {weekday:'short', hour:'2-digit'}) }));
+  const today = m.series.slice(-24);
+  const maxToday = Math.max(...today.map(p=>p.price));
+  const minToday = Math.min(...today.map(p=>p.price));
+
+  const driverCards = [
+    {label:"Demand", v:m.drivers.demand, unit:"%", desc: m.drivers.demand>0 ? "Higher demand is pulling prices upward." : "Softer demand is easing pressure on price."},
+    {label:"Solar", v:m.drivers.solar, unit:"%", desc: m.drivers.solar>0 ? "Extra solar output is pushing midday prices down." : "Lower solar output is reducing the usual midday dip."},
+    {label:"Wind", v:m.drivers.wind, unit:"%", desc: m.drivers.wind>0 ? "Strong wind generation is adding cheap supply." : "Calmer wind is tightening supply somewhat."},
+    {label:"Temperature", v:m.drivers.temperature, unit:"°C", desc: "Heating and cooling load shift with the temperature swing."},
+    {label:"Gas", v:m.drivers.gas, unit:"%", desc: m.drivers.gas>0 ? "Rising gas costs are feeding into the price of power." : "Cheaper gas is easing generation costs."},
+    {label:"Grid", v:null, unit:"", desc:`Grid conditions are reading as ${m.drivers.gridStatus.toLowerCase()} today.`},
+  ];
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10">
+      <div className="flex items-center gap-2 text-sm text-dim mb-6">
+        <a href="#/markets" className="hover:text-current">Markets</a><span>/</span><span className="text-current">{m.label}</span>
+      </div>
+
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-8">
+        <div>
+          <div className="flex items-center gap-3 mb-2">
+            <span className="w-10 h-10 rounded-lg bg-surface2 border border-hair flex items-center justify-center text-xs font-mono">{m.id.toUpperCase()}</span>
+            <div>
+              <h1 className="font-display text-2xl">{m.label}</h1>
+              <p className="text-dim text-xs">Last updated {timeAgo(m.lastUpdated)} · Demo Market Data</p>
+            </div>
+          </div>
+          <div className="flex items-baseline gap-3">
+            <p className="font-mono text-4xl">{fmt(m.current, m.currency)}</p>
+            <span className="text-dim text-sm">/MWh</span>
+            <ChangeTag value={m.change24} size="md" />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={()=>toggleWatch(m.id)} className={`border border-hair rounded-lg px-3 py-2 text-sm flex items-center gap-2 ${watchlist.includes(m.id)?"text-accent":"text-dim"}`}>
+            {watchlist.includes(m.id)?I.starFilled:I.star} {watchlist.includes(m.id)?"Watching":"Watch"}
+          </button>
+          <button onClick={()=>openAlertModal(m.id)} className="border border-hair rounded-lg px-3 py-2 text-sm flex items-center gap-2 text-dim">{I.bell} Alert</button>
+          <button onClick={()=>goTrade(m.id)} className="bg-accent rounded-lg px-4 py-2 text-sm font-medium">Trade</button>
+        </div>
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-6 mb-10">
+        <div className="lg:col-span-2 card p-5">
+          <div className="flex gap-2 mb-4">
+            {RANGES.map(r=>(
+              <button key={r.k} onClick={()=>setRange(r.k)} className={`text-xs px-3 py-1.5 rounded-lg border ${range===r.k?"bg-accent border-transparent":"border-hair text-dim"}`}>{r.k}</button>
+            ))}
+          </div>
+          <ResponsiveContainer width="100%" height={280}>
+            <AreaChart data={data} margin={{top:5,right:5,left:-20,bottom:0}}>
+              <defs>
+                <linearGradient id="detailGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--signal)" stopOpacity={0.35}/>
+                  <stop offset="100%" stopColor="var(--signal)" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+              <XAxis dataKey="label" tick={{fontSize:10, fill:"var(--text-dim)"}} interval={Math.floor(data.length/5)} axisLine={false} tickLine={false} />
+              <YAxis tick={{fontSize:10, fill:"var(--text-dim)"}} axisLine={false} tickLine={false} width={45} />
+              <Tooltip contentStyle={{background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, fontSize:12}} formatter={(v)=>[fmt(v,m.currency)+"/MWh","Price"]} labelStyle={{color:"var(--text-dim)"}} />
+              <Area type="monotone" dataKey="price" stroke="var(--signal)" strokeWidth={2} fill="url(#detailGrad)" isAnimationActive={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="card p-5">
+          <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">Market statistics</p>
+          <div className="grid grid-cols-2 gap-y-4 text-sm">
+            <div><p className="text-dim text-xs mb-0.5">Today's high</p><p className="font-mono">{fmt(m.todayHigh, m.currency)}</p></div>
+            <div><p className="text-dim text-xs mb-0.5">Today's low</p><p className="font-mono">{fmt(m.todayLow, m.currency)}</p></div>
+            <div><p className="text-dim text-xs mb-0.5">Previous close</p><p className="font-mono">{fmt(m.prevClose, m.currency)}</p></div>
+            <div><p className="text-dim text-xs mb-0.5">Today's average</p><p className="font-mono">{fmt(m.avg, m.currency)}</p></div>
+            <div><p className="text-dim text-xs mb-0.5">Volatility (48h)</p><p className="font-mono">{m.volatility}</p></div>
+            <div><p className="text-dim text-xs mb-0.5">7D change</p><p><ChangeTag value={m.change7d} /></p></div>
+            <div><p className="text-dim text-xs mb-0.5">~52W high</p><p className="font-mono">{fmt(m.ath, m.currency)}</p></div>
+            <div><p className="text-dim text-xs mb-0.5">~52W low</p><p className="font-mono">{fmt(m.atl, m.currency)}</p></div>
+          </div>
+          <p className="text-[11px] text-dim mt-4 leading-relaxed">52 week figures are approximated from the current demo dataset for illustration.</p>
+        </div>
+      </div>
+
+      {/* Drivers */}
+      <div className="mb-10">
+        <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">What's moving this market?</p>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {driverCards.map(d=>(
+            <div key={d.label} className="card p-4">
+              <div className="flex items-center justify-between mb-1.5">
+                <p className="text-sm font-medium">{d.label}</p>
+                {d.v!==null && (
+                  <span className={`font-mono text-xs ${d.v>=0?"text-pos":"text-neg"}`}>{d.v>=0?"↑":"↓"} {Math.abs(d.v)}{d.unit}</span>
+                )}
+              </div>
+              <p className="text-dim text-xs leading-relaxed">{d.desc}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Heatmap */}
+      <div className="mb-10">
+        <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">Today's hourly prices</p>
+        <div className="card p-5">
+          <div className="grid grid-cols-6 sm:grid-cols-12 gap-1.5 mb-4">
+            {today.map((p,i)=>{
+              const pct = (p.price-minToday)/((maxToday-minToday)||1);
+              const bg = `rgba(232,163,61,${0.15+pct*0.75})`;
+              return (
+                <div key={i} title={`${hourLabel(p.hour)} — ${fmt(p.price,m.currency)}`} className="rounded-md h-12 flex flex-col items-center justify-center text-[10px] font-mono" style={{background:bg}}>
+                  <span className="opacity-80">{p.hour}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex flex-wrap gap-6 text-sm">
+            <div><p className="text-dim text-xs mb-0.5">Cheapest hour</p><p className="font-mono text-pos">{hourLabel(m.cheapest.hour)} — {fmt(m.cheapest.price,m.currency)}</p></div>
+            <div><p className="text-dim text-xs mb-0.5">Most expensive hour</p><p className="font-mono text-neg">{hourLabel(m.priciest.hour)} — {fmt(m.priciest.price,m.currency)}</p></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================= DASHBOARD ============================= */
+function Dashboard({ watchlist, toggleWatch, alerts, openAlertModal, removeAlert, portfolio }){
+  const movers = [...MARKETS].sort((a,b)=>b.change24-a.change24);
+  const gainers = movers.slice(0,3), losers = movers.slice(-3).reverse();
+  const watched = MARKETS.filter(m=>watchlist.includes(m.id));
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10">
+      <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">Dashboard</p>
+      <h1 className="font-display text-3xl mb-8">Good to see you. Here's what's moving.</h1>
+
+      <div className="grid sm:grid-cols-3 gap-4 mb-10">
+        <div className="card p-5">
+          <p className="text-dim text-xs mb-1">Demo portfolio value</p>
+          <p className="font-mono text-2xl">€{portfolio.totalValue.toFixed(2)}</p>
+        </div>
+        <div className="card p-5">
+          <p className="text-dim text-xs mb-1">Open positions</p>
+          <p className="font-mono text-2xl">{portfolio.openCount}</p>
+        </div>
+        <div className="card p-5">
+          <p className="text-dim text-xs mb-1">Watchlist</p>
+          <p className="font-mono text-2xl">{watched.length} markets</p>
+        </div>
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-6 mb-10">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-dim font-mono mb-3">Biggest increases</p>
+          <div className="card divide-y divide-[var(--border)]">
+            {gainers.map(m=>(
+              <a href={`#/market/${m.id}`} key={m.id} className="flex items-center justify-between px-4 py-3 hover:bg-surface2">
+                <span className="text-sm">{m.label}</span>
+                <div className="flex items-center gap-3"><span className="font-mono text-sm">{fmt(m.current,m.currency)}</span><ChangeTag value={m.change24} /></div>
+              </a>
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-dim font-mono mb-3">Biggest decreases</p>
+          <div className="card divide-y divide-[var(--border)]">
+            {losers.map(m=>(
+              <a href={`#/market/${m.id}`} key={m.id} className="flex items-center justify-between px-4 py-3 hover:bg-surface2">
+                <span className="text-sm">{m.label}</span>
+                <div className="flex items-center gap-3"><span className="font-mono text-sm">{fmt(m.current,m.currency)}</span><ChangeTag value={m.change24} /></div>
+              </a>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-6">
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs uppercase tracking-wide text-dim font-mono">My watchlist</p>
+            <a href="#/markets" className="text-xs text-accent">Add markets</a>
+          </div>
+          {watched.length===0 ? (
+            <div className="card"><EmptyState title="Your watchlist is empty" sub="Follow a market to see it here." cta="Explore Markets" onCta={()=>nav("#/markets")} /></div>
+          ) : (
+            <div className="card divide-y divide-[var(--border)]">
+              {watched.map(m=>(
+                <div key={m.id} className="flex items-center justify-between px-4 py-3">
+                  <a href={`#/market/${m.id}`} className="text-sm">{m.label}</a>
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-sm">{fmt(m.current,m.currency)}</span>
+                    <ChangeTag value={m.change24} />
+                    <button onClick={()=>toggleWatch(m.id)} className="text-dim hover:text-neg">{I.trash}</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs uppercase tracking-wide text-dim font-mono">Price alerts</p>
+            <button onClick={()=>openAlertModal(MARKETS[0].id)} className="text-xs text-accent flex items-center gap-1">{I.plus} New alert</button>
+          </div>
+          {alerts.length===0 ? (
+            <div className="card"><EmptyState title="No alerts yet" sub="We'll notify you when a market crosses a level you care about." /></div>
+          ) : (
+            <div className="card divide-y divide-[var(--border)]">
+              {alerts.map(a=>(
+                <div key={a.id} className="flex items-center justify-between px-4 py-3">
+                  <div>
+                    <p className="text-sm">{MARKETS.find(m=>m.id===a.marketId)?.label}</p>
+                    <p className="text-dim text-xs">Notify when {a.condition} {a.value}{MARKETS.find(m=>m.id===a.marketId)?.currency}</p>
+                  </div>
+                  <button onClick={()=>removeAlert(a.id)} className="text-dim hover:text-neg">{I.trash}</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================= TRADE PAGE ============================= */
+function TradePage({ marketId, setMarketId, positions, openPosition, closePosition, balance, toast }){
+  const m = MARKETS.find(x=>x.id===marketId) || MARKETS[0];
+  const [direction, setDirection] = useState("long");
+  const [stake, setStake] = useState(100);
+  const [sl, setSl] = useState("");
+  const [tp, setTp] = useState("");
+  const leverage = 8;
+  const data = m.series.slice(-72).map(p=>({t:p.t, price:p.price, label:new Date(p.t).toLocaleString([],{hour:'2-digit'})}));
+  const openForMarket = positions.filter(p=>p.status==="open");
+
+  const estMovePct = 2; // illustrative
+  const estPnl = (direction==="long"? 1: -1) * (estMovePct/100) * stake * leverage;
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10">
+      <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">Paper Trading</p>
+      <h1 className="font-display text-3xl mb-2">Trade Terminal</h1>
+      <p className="text-dim mb-6">This is a simulated trade. You are not purchasing physical electricity.</p>
+
+      <div className="grid lg:grid-cols-[220px_1fr_320px] gap-6">
+        {/* market select */}
+        <div className="card p-3 h-fit lg:sticky lg:top-20">
+          <p className="text-xs uppercase tracking-wide text-dim font-mono px-2 py-2">Markets</p>
+          <div className="flex lg:flex-col gap-1 overflow-x-auto no-scrollbar">
+            {MARKETS.map(mk=>(
+              <button key={mk.id} onClick={()=>setMarketId(mk.id)} className={`flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap ${mk.id===marketId?"bg-surface2 border border-hair":"hover:bg-surface2"}`}>
+                <span>{mk.name}</span>
+                <ChangeTag value={mk.change24} />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* chart */}
+        <div className="card p-5">
+          <div className="flex items-baseline gap-3 mb-4">
+            <p className="font-display text-lg">{m.label}</p>
+            <p className="font-mono text-2xl">{fmt(m.current,m.currency)}</p>
+            <ChangeTag value={m.change24} />
+          </div>
+          <ResponsiveContainer width="100%" height={300}>
+            <AreaChart data={data} margin={{top:5,right:5,left:-20,bottom:0}}>
+              <defs>
+                <linearGradient id="tradeGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.3}/>
+                  <stop offset="100%" stopColor="var(--accent)" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+              <XAxis dataKey="label" tick={{fontSize:10, fill:"var(--text-dim)"}} interval={11} axisLine={false} tickLine={false} />
+              <YAxis tick={{fontSize:10, fill:"var(--text-dim)"}} axisLine={false} tickLine={false} width={45} />
+              <Tooltip contentStyle={{background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, fontSize:12}} formatter={(v)=>[fmt(v,m.currency)+"/MWh","Price"]} labelStyle={{color:"var(--text-dim)"}}/>
+              <Area type="monotone" dataKey="price" stroke="var(--accent)" strokeWidth={2} fill="url(#tradeGrad)" isAnimationActive={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+
+          <p className="text-xs uppercase tracking-wide text-dim font-mono mt-6 mb-3">Open positions on {m.name}</p>
+          {openForMarket.filter(p=>p.marketId===m.id).length===0 ? (
+            <p className="text-dim text-sm">You haven't made a paper trade on this market yet.</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {openForMarket.filter(p=>p.marketId===m.id).map(p=>{
+                const pnl = (p.direction==="long"?1:-1) * ((m.current-p.entryPrice)/p.entryPrice) * p.stake * leverage;
+                return (
+                  <div key={p.id} className="flex items-center justify-between border border-hair rounded-lg px-3 py-2">
+                    <div className="flex items-center gap-3">
+                      <Tag tone={p.direction==="long"?"pos":"neg"}>{p.direction}</Tag>
+                      <span className="text-xs text-dim font-mono">entry {fmt(p.entryPrice,m.currency)}</span>
+                      <span className="text-xs text-dim font-mono">stake €{p.stake}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className={`font-mono text-sm ${pnl>=0?"text-pos":"text-neg"}`}>{pnl>=0?"+":""}€{pnl.toFixed(2)}</span>
+                      <button onClick={()=>closePosition(p.id, m.current)} className="text-xs border border-hair rounded-md px-2 py-1">Close</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* order panel */}
+        <div className="card p-5 h-fit">
+          <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">Order panel</p>
+          <div className="flex gap-2 mb-4">
+            <button onClick={()=>setDirection("long")} className={`flex-1 py-2 rounded-lg text-sm font-medium ${direction==="long"?"bg-signal text-white":"border border-hair text-dim"}`}>Long</button>
+            <button onClick={()=>setDirection("short")} className={`flex-1 py-2 rounded-lg text-sm font-medium ${direction==="short"?"text-white":"border border-hair text-dim"}`} style={direction==="short"?{background:"var(--negative)"}:{}}>Short</button>
+          </div>
+          <label className="text-xs text-dim">Stake (demo €)</label>
+          <input type="number" value={stake} min="10" step="10" onChange={e=>setStake(Math.max(10, Number(e.target.value)))} className="w-full bg-surface2 border border-hair rounded-lg px-3 py-2 text-sm mt-1 mb-3 font-mono" />
+          <input type="range" min="10" max={Math.min(2000, balance)} step="10" value={Math.min(stake, balance)} onChange={e=>setStake(Number(e.target.value))} className="w-full mb-4" />
+
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div>
+              <label className="text-xs text-dim">Take profit (optional)</label>
+              <input value={tp} onChange={e=>setTp(e.target.value)} placeholder={fmt(m.current*(direction==="long"?1.05:0.95),m.currency)} className="w-full bg-surface2 border border-hair rounded-lg px-2 py-2 text-xs mt-1 font-mono" />
+            </div>
+            <div>
+              <label className="text-xs text-dim">Stop loss (optional)</label>
+              <input value={sl} onChange={e=>setSl(e.target.value)} placeholder={fmt(m.current*(direction==="long"?0.95:1.05),m.currency)} className="w-full bg-surface2 border border-hair rounded-lg px-2 py-2 text-xs mt-1 font-mono" />
+            </div>
+          </div>
+
+          <div className="border-hair border rounded-lg p-3 mb-4 text-xs space-y-1.5">
+            <div className="flex justify-between text-dim"><span>Entry price</span><span className="font-mono text-current">{fmt(m.current,m.currency)}</span></div>
+            <div className="flex justify-between text-dim"><span>Simulated leverage</span><span className="font-mono text-current">{leverage}x</span></div>
+            <div className="flex justify-between text-dim"><span>If price moves {estMovePct}% in your favor</span><span className={`font-mono ${estPnl>=0?"text-pos":"text-neg"}`}>+€{Math.abs(estPnl).toFixed(2)}</span></div>
+            <div className="flex justify-between text-dim"><span>Demo balance available</span><span className="font-mono text-current">€{balance.toFixed(2)}</span></div>
+          </div>
+
+          <p className="text-[11px] text-dim leading-relaxed mb-4">This is a simulated trade using demo funds and simulated leverage for illustration. You are not purchasing physical electricity, and this is not financial advice.</p>
+
+          <button
+            disabled={stake>balance}
+            onClick={()=>{ openPosition({marketId:m.id, direction, stake, entryPrice:m.current, sl, tp}); toast(`Simulated ${direction} opened on ${m.name} at ${fmt(m.current,m.currency)}`); }}
+            className="w-full bg-accent py-3 rounded-lg font-medium disabled:opacity-40">
+            Confirm Simulated Trade
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================= PORTFOLIO PAGE ============================= */
+function PortfolioPage({ positions, closePosition, balance }){
+  const open = positions.filter(p=>p.status==="open");
+  const closed = positions.filter(p=>p.status==="closed");
+  const leverage = 8;
+  const withPnl = open.map(p=>{
+    const m = MARKETS.find(x=>x.id===p.marketId);
+    const pnl = (p.direction==="long"?1:-1) * ((m.current-p.entryPrice)/p.entryPrice) * p.stake * leverage;
+    return {...p, market:m, pnl};
+  });
+  const unrealized = withPnl.reduce((a,p)=>a+p.pnl,0);
+  const realized = closed.reduce((a,p)=>a+p.pnl,0);
+  const totalValue = balance + open.reduce((a,p)=>a+p.stake,0) + unrealized;
+  const wins = closed.filter(p=>p.pnl>0).length;
+  const winRate = closed.length ? Math.round((wins/closed.length)*100) : 0;
+
+  const perfData = useMemo(()=>{
+    let running = 10000;
+    const pts = [{i:0, v:running}];
+    closed.forEach((p,i)=>{ running += p.pnl; pts.push({i:i+1, v:Math.round(running*100)/100}); });
+    if(pts.length===1) pts.push({i:1, v:running});
+    return pts;
+  },[closed]);
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10">
+      <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">Portfolio</p>
+      <h1 className="font-display text-3xl mb-8">Your Demo Portfolio</h1>
+
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div className="card p-5"><p className="text-dim text-xs mb-1">Portfolio value</p><p className="font-mono text-2xl">€{totalValue.toFixed(2)}</p></div>
+        <div className="card p-5"><p className="text-dim text-xs mb-1">Available balance</p><p className="font-mono text-2xl">€{balance.toFixed(2)}</p></div>
+        <div className="card p-5"><p className="text-dim text-xs mb-1">Unrealized P&L</p><p className={`font-mono text-2xl ${unrealized>=0?"text-pos":"text-neg"}`}>{unrealized>=0?"+":""}€{unrealized.toFixed(2)}</p></div>
+        <div className="card p-5"><p className="text-dim text-xs mb-1">Win rate</p><p className="font-mono text-2xl">{winRate}%</p></div>
+      </div>
+
+      <div className="card p-5 mb-10">
+        <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">Performance over closed trades</p>
+        <ResponsiveContainer width="100%" height={200}>
+          <LineChart data={perfData} margin={{top:5,right:5,left:-10,bottom:0}}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+            <XAxis dataKey="i" tick={{fontSize:10, fill:"var(--text-dim)"}} axisLine={false} tickLine={false} />
+            <YAxis tick={{fontSize:10, fill:"var(--text-dim)"}} axisLine={false} tickLine={false} width={50} domain={['auto','auto']} />
+            <Tooltip contentStyle={{background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, fontSize:12}} formatter={(v)=>["€"+v,"Balance"]} />
+            <Line type="monotone" dataKey="v" stroke="var(--accent)" strokeWidth={2} dot={false} isAnimationActive={false}/>
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <p className="text-xs uppercase tracking-wide text-dim font-mono mb-3">Open positions</p>
+      {withPnl.length===0 ? (
+        <div className="card mb-10"><EmptyState title="No open positions" sub="Head to the trade terminal to open a simulated position." cta="Go to Trade" onCta={()=>nav("#/trade")} /></div>
+      ) : (
+        <div className="card overflow-x-auto mb-10">
+          <table className="w-full text-sm min-w-[600px]">
+            <thead className="hairline border-b"><tr>
+              {["Market","Direction","Entry","Current","Stake","P&L",""].map(h=><th key={h} className="text-left text-xs uppercase text-dim font-mono py-3 px-3">{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {withPnl.map(p=>(
+                <tr key={p.id} className="hairline border-b last:border-0">
+                  <td className="py-3 px-3">{p.market.name}</td>
+                  <td className="py-3 px-3"><Tag tone={p.direction==="long"?"pos":"neg"}>{p.direction}</Tag></td>
+                  <td className="py-3 px-3 font-mono">{fmt(p.entryPrice, p.market.currency)}</td>
+                  <td className="py-3 px-3 font-mono">{fmt(p.market.current, p.market.currency)}</td>
+                  <td className="py-3 px-3 font-mono">€{p.stake}</td>
+                  <td className={`py-3 px-3 font-mono ${p.pnl>=0?"text-pos":"text-neg"}`}>{p.pnl>=0?"+":""}€{p.pnl.toFixed(2)}</td>
+                  <td className="py-3 px-3"><button onClick={()=>closePosition(p.id, p.market.current)} className="text-xs border border-hair rounded-md px-2 py-1">Close</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <p className="text-xs uppercase tracking-wide text-dim font-mono mb-3">Trade history</p>
+      {closed.length===0 ? (
+        <div className="card"><EmptyState title="No closed trades yet" sub="Closed simulated trades will show up here." /></div>
+      ) : (
+        <div className="card overflow-x-auto">
+          <table className="w-full text-sm min-w-[600px]">
+            <thead className="hairline border-b"><tr>
+              {["Market","Direction","Entry","Exit","Stake","P&L","Status"].map(h=><th key={h} className="text-left text-xs uppercase text-dim font-mono py-3 px-3">{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {closed.slice().reverse().map(p=>(
+                <tr key={p.id} className="hairline border-b last:border-0">
+                  <td className="py-3 px-3">{MARKETS.find(m=>m.id===p.marketId)?.name}</td>
+                  <td className="py-3 px-3"><Tag tone={p.direction==="long"?"pos":"neg"}>{p.direction}</Tag></td>
+                  <td className="py-3 px-3 font-mono">{fmt(p.entryPrice, MARKETS.find(m=>m.id===p.marketId)?.currency)}</td>
+                  <td className="py-3 px-3 font-mono">{fmt(p.closePrice, MARKETS.find(m=>m.id===p.marketId)?.currency)}</td>
+                  <td className="py-3 px-3 font-mono">€{p.stake}</td>
+                  <td className={`py-3 px-3 font-mono ${p.pnl>=0?"text-pos":"text-neg"}`}>{p.pnl>=0?"+":""}€{p.pnl.toFixed(2)}</td>
+                  <td className="py-3 px-3"><Tag>{p.pnl>=0?"Win":"Loss"}</Tag></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================= LEARN PAGE ============================= */
+const ARTICLES = [
+  {id:"what-is-mwh", cat:"Beginner", title:"What does €/MWh actually mean?", time:"3 min", body:"A megawatt hour is one thousand kilowatt hours, roughly what a few hundred homes might use in an hour. Prices are usually quoted this way because it's the standard unit wholesale markets trade in, even though your household bill is priced per kilowatt hour."},
+  {id:"day-ahead", cat:"Electricity Markets", title:"What is a day-ahead market?", time:"4 min", body:"Day-ahead markets set tomorrow's hourly electricity prices today, based on forecast demand and supply. Generators and buyers submit bids the day before delivery, and the market clears an hourly price for the following day."},
+  {id:"negative-prices", cat:"Electricity Markets", title:"Why can electricity prices go negative?", time:"3 min", body:"When there's more renewable generation than the grid can absorb, some producers pay to keep running rather than shut down, pushing prices below zero for short stretches, usually around the sunniest or windiest hours of the day."},
+  {id:"long-short", cat:"Trading", title:"Long vs short, explained simply", time:"3 min", body:"Going long means you profit if the price rises. Going short means you profit if the price falls. Neither involves owning or delivering any physical electricity, it's simply a position on where the price is headed."},
+  {id:"volatility", cat:"Trading", title:"Understanding volatility", time:"3 min", body:"Volatility measures how much a price has been swinging, not which direction it's headed. A highly volatile market can move sharply in either direction, which is exactly what makes it interesting to some traders and risky for everyone else."},
+  {id:"hedging", cat:"Business", title:"How businesses hedge energy costs", time:"5 min", body:"A business that depends on steady electricity costs can take a position that gains value when prices rise, offsetting a higher power bill. It doesn't eliminate the cost, but it can soften the impact of a sudden spike."},
+];
+function LearnPage(){
+  const [active, setActive] = useState(null);
+  const cats = ["All", ...new Set(ARTICLES.map(a=>a.cat))];
+  const [cat, setCat] = useState("All");
+  const list = cat==="All" ? ARTICLES : ARTICLES.filter(a=>a.cat===cat);
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10">
+      <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">Learn</p>
+      <h1 className="font-display text-3xl mb-6">Understand electricity markets, no jargon.</h1>
+      <div className="flex gap-2 mb-8 overflow-x-auto no-scrollbar">
+        {cats.map(c=>(
+          <button key={c} onClick={()=>setCat(c)} className={`text-xs px-3 py-1.5 rounded-lg border whitespace-nowrap ${cat===c?"bg-accent border-transparent":"border-hair text-dim"}`}>{c}</button>
+        ))}
+      </div>
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {list.map(a=>(
+          <button key={a.id} onClick={()=>setActive(a)} className="card p-5 text-left hover:border-accent transition-colors">
+            <Tag>{a.cat}</Tag>
+            <p className="font-display text-lg mt-3 mb-2 leading-snug">{a.title}</p>
+            <p className="text-dim text-xs">{a.time} read</p>
+          </button>
+        ))}
+      </div>
+      {active && (
+        <Modal title={active.title} onClose={()=>setActive(null)} wide>
+          <Tag>{active.cat}</Tag>
+          <p className="text-dim text-xs mt-3 mb-4">{active.time} read</p>
+          <p className="text-sm leading-relaxed">{active.body}</p>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ============================= BUSINESS CALCULATOR ============================= */
+function BusinessPage(){
+  const [usage, setUsage] = useState(10000);
+  const [current, setCurrent] = useState(0.14);
+  const [future, setFuture] = useState(0.20);
+  const currentCost = usage*current;
+  const futureCost = usage*future;
+  const diff = futureCost-currentCost;
+  const pct = current ? (diff/currentCost)*100 : 0;
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10">
+      <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">For business</p>
+      <h1 className="font-display text-3xl mb-2">Protect Your Energy Costs</h1>
+      <p className="text-dim mb-8 max-w-xl">Estimate what a price move would do to your monthly bill. This is an educational calculator, not a quote or guaranteed outcome.</p>
+
+      <div className="grid lg:grid-cols-2 gap-6">
+        <div className="card p-6">
+          <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">Your numbers</p>
+          <label className="text-sm">Monthly electricity usage (kWh)</label>
+          <input type="number" value={usage} onChange={e=>setUsage(Number(e.target.value)||0)} className="w-full bg-surface2 border border-hair rounded-lg px-3 py-2 text-sm mt-1 mb-4 font-mono" />
+          <label className="text-sm">Current price (€ / kWh)</label>
+          <input type="number" step="0.01" value={current} onChange={e=>setCurrent(Number(e.target.value)||0)} className="w-full bg-surface2 border border-hair rounded-lg px-3 py-2 text-sm mt-1 mb-4 font-mono" />
+          <label className="text-sm">Expected future price (€ / kWh)</label>
+          <input type="number" step="0.01" value={future} onChange={e=>setFuture(Number(e.target.value)||0)} className="w-full bg-surface2 border border-hair rounded-lg px-3 py-2 text-sm mt-1 font-mono" />
+        </div>
+
+        <div className="card p-6">
+          <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">Estimated impact</p>
+          <div className="space-y-4">
+            <div className="flex justify-between items-baseline"><span className="text-dim text-sm">Current estimated cost</span><span className="font-mono text-lg">€{currentCost.toFixed(2)}/mo</span></div>
+            <div className="flex justify-between items-baseline"><span className="text-dim text-sm">At future price</span><span className="font-mono text-lg">€{futureCost.toFixed(2)}/mo</span></div>
+            <div className="hairline border-t pt-4 flex justify-between items-baseline">
+              <span className="text-sm">Potential {diff>=0?"increase":"decrease"}</span>
+              <span className={`font-mono text-xl ${diff>=0?"text-neg":"text-pos"}`}>{diff>=0?"+":""}€{Math.abs(diff).toFixed(2)}/mo ({fmtPct(pct)})</span>
+            </div>
+            <div className="flex justify-between items-baseline"><span className="text-dim text-sm">Annualized impact</span><span className="font-mono">€{Math.abs(diff*12).toFixed(2)}/yr</span></div>
+          </div>
+          <button onClick={()=>nav("#/trade")} className="w-full bg-accent py-2.5 rounded-lg font-medium mt-6 text-sm">Explore protection scenarios</button>
+          <p className="text-[11px] text-dim leading-relaxed mt-4">This calculator is for illustration only and does not constitute a quote, guarantee, or energy procurement advice.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================= ALERT MODAL ============================= */
+function AlertModal({ marketId, onClose, addAlert }){
+  const m = MARKETS.find(x=>x.id===marketId) || MARKETS[0];
+  const [selMarket, setSelMarket] = useState(marketId || MARKETS[0].id);
+  const [condition, setCondition] = useState("rises above");
+  const [value, setValue] = useState(Math.round(m.current*1.1));
+  return (
+    <Modal title="New price alert" onClose={onClose}>
+      <label className="text-xs text-dim">Market</label>
+      <select value={selMarket} onChange={e=>setSelMarket(e.target.value)} className="w-full bg-surface2 border border-hair rounded-lg px-3 py-2 text-sm mt-1 mb-4">
+        {MARKETS.map(mk=><option key={mk.id} value={mk.id}>{mk.label}</option>)}
+      </select>
+      <label className="text-xs text-dim">Condition</label>
+      <select value={condition} onChange={e=>setCondition(e.target.value)} className="w-full bg-surface2 border border-hair rounded-lg px-3 py-2 text-sm mt-1 mb-4">
+        <option>rises above</option><option>falls below</option><option>moves more than 15% in 24h</option>
+      </select>
+      {condition!=="moves more than 15% in 24h" && (
+        <>
+          <label className="text-xs text-dim">Price ({MARKETS.find(x=>x.id===selMarket).currency}/MWh)</label>
+          <input type="number" value={value} onChange={e=>setValue(Number(e.target.value))} className="w-full bg-surface2 border border-hair rounded-lg px-3 py-2 text-sm mt-1 mb-4 font-mono" />
+        </>
+      )}
+      <button onClick={()=>{ addAlert({marketId:selMarket, condition, value}); onClose(); }} className="w-full bg-accent py-2.5 rounded-lg font-medium text-sm">Create alert</button>
+    </Modal>
+  );
+}
+
+/* ============================= APP ROOT ============================= */
+function App(){
+  const route = useHashRoute();
+  const [theme, setTheme] = useState("dark");
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [watchlist, setWatchlist] = useState(["de","gb"]);
+  const [alerts, setAlerts] = useState([]);
+  const [alertModal, setAlertModal] = useState(null);
+  const [positions, setPositions] = useState([]);
+  const [balance, setBalance] = useState(10000);
+  const [tradeMarket, setTradeMarket] = useState("de");
+  const [toasts, setToasts] = useState([]);
+
+  useEffect(()=>{ document.documentElement.className = theme==="light" ? "light" : ""; },[theme]);
+
+  const toggleWatch = (id)=> setWatchlist(w=> w.includes(id) ? w.filter(x=>x!==id) : [...w, id]);
+  const addAlert = (a)=> { setAlerts(al=>[...al, {...a, id:Date.now()}]); pushToast(`Alert created for ${MARKETS.find(m=>m.id===a.marketId).name}`); };
+  const removeAlert = (id)=> setAlerts(al=>al.filter(a=>a.id!==id));
+
+  const pushToast = (msg)=>{
+    const id = Date.now()+Math.random();
+    setToasts(t=>[...t, {id, msg}]);
+    setTimeout(()=> setToasts(t=>t.filter(x=>x.id!==id)), 3500);
+  };
+
+  const openPosition = ({marketId, direction, stake, entryPrice, sl, tp})=>{
+    if(stake>balance) return;
+    setBalance(b=>b-stake);
+    setPositions(p=>[...p, {id:Date.now(), marketId, direction, stake, entryPrice, sl, tp, status:"open", openedAt:Date.now()}]);
+  };
+  const closePosition = (id, currentPrice)=>{
+    setPositions(prev=> prev.map(p=>{
+      if(p.id!==id) return p;
+      const leverage=8;
+      const pnl = (p.direction==="long"?1:-1) * ((currentPrice-p.entryPrice)/p.entryPrice) * p.stake * leverage;
+      setBalance(b=> b + p.stake + pnl);
+      pushToast(`Closed ${p.direction} position: ${pnl>=0?"+":""}€${pnl.toFixed(2)}`);
+      return {...p, status:"closed", closePrice:currentPrice, pnl};
+    }));
+  };
+
+  const goTrade = (id)=>{ setTradeMarket(id); nav("#/trade"); };
+  const openAlertModal = (id)=> setAlertModal(id);
+
+  const open = positions.filter(p=>p.status==="open");
+  const leverage=8;
+  const unrealized = open.reduce((a,p)=>{ const m=MARKETS.find(x=>x.id===p.marketId); return a + (p.direction==="long"?1:-1)*((m.current-p.entryPrice)/p.entryPrice)*p.stake*leverage; },0);
+  const portfolio = { totalValue: balance + open.reduce((a,p)=>a+p.stake,0) + unrealized, openCount: open.length };
+
+  let page;
+  if(route==="#/" || route==="") page = <Landing/>;
+  else if(route==="#/markets") page = <MarketsPage watchlist={watchlist} toggleWatch={toggleWatch} />;
+  else if(route.startsWith("#/market/")) page = <MarketDetail id={route.split("/")[2]} watchlist={watchlist} toggleWatch={toggleWatch} openAlertModal={openAlertModal} goTrade={goTrade} />;
+  else if(route==="#/dashboard") page = <Dashboard watchlist={watchlist} toggleWatch={toggleWatch} alerts={alerts} openAlertModal={openAlertModal} removeAlert={removeAlert} portfolio={portfolio} />;
+  else if(route==="#/trade") page = <TradePage marketId={tradeMarket} setMarketId={setTradeMarket} positions={positions} openPosition={openPosition} closePosition={closePosition} balance={balance} toast={pushToast} />;
+  else if(route==="#/portfolio") page = <PortfolioPage positions={positions} closePosition={closePosition} balance={balance} />;
+  else if(route==="#/learn") page = <LearnPage/>;
+  else if(route==="#/business") page = <BusinessPage/>;
+  else page = <Landing/>;
+
+  return (
+    <div className="min-h-screen pb-16 lg:pb-0">
+      <TopNav theme={theme} toggleTheme={()=>setTheme(t=>t==="dark"?"light":"dark")} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
+      {page}
+      <Footer/>
+      <MobileTabBar/>
+      <Toast toasts={toasts} />
+      {alertModal && <AlertModal marketId={alertModal} onClose={()=>setAlertModal(null)} addAlert={addAlert} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

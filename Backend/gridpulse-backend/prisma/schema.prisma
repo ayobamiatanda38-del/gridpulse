@@ -1,0 +1,150 @@
+// GridPulse database schema
+// Run: npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String
+  name          String
+  country       String?
+  accountType   String    @default("individual") // individual | business
+  experience    String    @default("beginner")   // beginner | some_experience | advanced
+  role          String    @default("user")       // user | admin
+  createdAt     DateTime  @default(now())
+
+  watchlists    Watchlist[]
+  alerts        Alert[]
+  positions     Position[]
+  trades        Trade[]
+  portfolio     Portfolio?
+  businessProfile BusinessProfile?
+  notifications Notification[]
+}
+
+model Market {
+  id            String    @id            // e.g. "de", "fr", "gb"
+  name          String
+  label         String
+  country       String
+  currency      String    @default("EUR")
+  unit          String    @default("MWh")
+  dataProvider  String    @default("entsoe") // entsoe | elexon | demo
+  providerCode  String?   // e.g. ENTSO-E bidding zone EIC code
+  isActive      Boolean   @default(true)
+
+  prices        MarketPrice[]
+  watchlists    Watchlist[]
+  alerts        Alert[]
+  positions     Position[]
+  trades        Trade[]
+}
+
+// One row per hourly (or sub-hourly) price point per market.
+model MarketPrice {
+  id          String    @id @default(uuid())
+  marketId    String
+  market      Market    @relation(fields: [marketId], references: [id])
+  timestamp   DateTime
+  price       Float
+  currency    String
+  source      String    @default("entsoe") // entsoe | elexon | demo
+  fetchedAt   DateTime  @default(now())
+
+  @@unique([marketId, timestamp])
+  @@index([marketId, timestamp])
+}
+
+model Watchlist {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  marketId    String
+  market      Market    @relation(fields: [marketId], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@unique([userId, marketId])
+}
+
+model Alert {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  marketId    String
+  market      Market    @relation(fields: [marketId], references: [id])
+  condition   String    // "above" | "below" | "pct_change_24h"
+  value       Float
+  isActive    Boolean   @default(true)
+  triggeredAt DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+model Portfolio {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id])
+  demoBalance   Float    @default(10000)
+  updatedAt     DateTime @updatedAt
+}
+
+// Simulated / paper positions only. See README: no real execution is implemented.
+model Position {
+  id            String    @id @default(uuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id])
+  marketId      String
+  market        Market    @relation(fields: [marketId], references: [id])
+  direction     String    // "long" | "short"
+  stake         Float
+  leverage      Float     @default(8)
+  entryPrice    Float
+  stopLoss      Float?
+  takeProfit    Float?
+  status        String    @default("open") // open | closed
+  openedAt      DateTime  @default(now())
+  closedAt      DateTime?
+  closePrice    Float?
+  pnl           Float?
+}
+
+model Trade {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  marketId    String
+  market      Market    @relation(fields: [marketId], references: [id])
+  positionId  String?
+  direction   String
+  entryPrice  Float
+  exitPrice   Float
+  stake       Float
+  pnl         Float
+  createdAt   DateTime  @default(now())
+}
+
+model BusinessProfile {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id])
+  monthlyUsageKwh   Float?
+  currentPriceKwh   Float?
+  industry          String?
+  updatedAt         DateTime @updatedAt
+}
+
+model Notification {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  message     String
+  isRead      Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+}
