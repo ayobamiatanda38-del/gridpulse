@@ -15,6 +15,7 @@ const adminRoutes = require("./routes/admin");
 const { providers } = require("./services/marketData");
 
 const app = express();
+app.set("trust proxy", 1);
 
 app.use(cors({ origin: process.env.CORS_ORIGIN || "*" }));
 app.use(express.json());
