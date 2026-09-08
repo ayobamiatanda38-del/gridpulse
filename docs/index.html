@@ -65,6 +65,41 @@ const { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Toolt
 /* ============================= LIVE BACKEND CONNECTION ============================= */
 // Your real Render backend. Change this if you ever redeploy under a new URL.
 const API_BASE = "https://gridpulse-kyss.onrender.com";
+const TOKEN_KEY = "gridpulse_token";
+
+/* ============================= AUTH API HELPERS ============================= */
+// Talks to the real /auth routes on your backend. Every call here hits an
+// actual server and an actual database, nothing here is faked.
+async function apiSignup({ name, email, password }){
+  const res = await fetch(`${API_BASE}/auth/signup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, email, password }),
+  });
+  const data = await res.json();
+  if(!res.ok) throw new Error(data.message || "Couldn't create your account.");
+  return data; // { token, user }
+}
+
+async function apiLogin({ email, password }){
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
+  if(!res.ok) throw new Error(data.message || "Couldn't sign you in.");
+  return data; // { token, user }
+}
+
+async function apiMe(token){
+  const res = await fetch(`${API_BASE}/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  if(!res.ok) throw new Error(data.message || "Session expired.");
+  return data.user;
+}
 
 /* ============================= ICONS ============================= */
 const Icon = ({ path, className="w-4 h-4", strokeW=1.8 }) => (
@@ -351,8 +386,73 @@ function StatusBanner({ status }){
   );
 }
 
+/* ============================= AUTH MODAL (real signup / login) ============================= */
+function AuthModal({ onClose, onAuthed, initialMode }){
+  const [mode, setMode] = useState(initialMode || "signup"); // "signup" | "login"
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e)=>{
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try{
+      const data = mode==="signup"
+        ? await apiSignup({ name, email, password })
+        : await apiLogin({ email, password });
+      onAuthed(data.token, data.user);
+    } catch(err){
+      // A real backend on a free tier can take up to a minute to wake up from
+      // sleep, so a network failure gets a friendlier message than a raw error.
+      if(err.message && err.message.toLowerCase().includes("fetch")){
+        setError("Couldn't reach the server. Free hosting sometimes needs a moment to wake up — please try again in about a minute.");
+      } else {
+        setError(err.message);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Modal title={mode==="signup" ? "Create your account" : "Log in"} onClose={onClose}>
+      <div className="flex gap-2 mb-5">
+        <button onClick={()=>{setMode("signup"); setError("");}} className={`flex-1 py-2 rounded-lg text-sm font-medium ${mode==="signup"?"bg-accent":"border border-hair text-dim"}`}>Sign up</button>
+        <button onClick={()=>{setMode("login"); setError("");}} className={`flex-1 py-2 rounded-lg text-sm font-medium ${mode==="login"?"bg-accent":"border border-hair text-dim"}`}>Log in</button>
+      </div>
+
+      <form onSubmit={submit}>
+        {mode==="signup" && (
+          <>
+            <label className="text-xs text-dim">Name</label>
+            <input required value={name} onChange={e=>setName(e.target.value)} className="w-full bg-surface2 border border-hair rounded-lg px-3 py-2 text-sm mt-1 mb-3" />
+          </>
+        )}
+        <label className="text-xs text-dim">Email</label>
+        <input required type="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full bg-surface2 border border-hair rounded-lg px-3 py-2 text-sm mt-1 mb-3" />
+        <label className="text-xs text-dim">Password</label>
+        <input required type="password" minLength={8} value={password} onChange={e=>setPassword(e.target.value)} className="w-full bg-surface2 border border-hair rounded-lg px-3 py-2 text-sm mt-1 mb-1" />
+        {mode==="signup" && <p className="text-[11px] text-dim mb-3">At least 8 characters.</p>}
+        {mode==="login" && <div className="mb-3" />}
+
+        {error && <p className="text-xs text-neg mb-3 leading-relaxed">{error}</p>}
+
+        <button disabled={loading} type="submit" className="w-full bg-accent py-2.5 rounded-lg font-medium text-sm disabled:opacity-50">
+          {loading ? "Please wait…" : mode==="signup" ? "Create account" : "Log in"}
+        </button>
+      </form>
+      <p className="text-[11px] text-dim leading-relaxed mt-4">
+        This creates a real account on GridPulse's own database, protected with a properly hashed password. It does not open any electricity market account or move any money.
+      </p>
+    </Modal>
+  );
+}
+
 /* ============================= NAV ============================= */
-function TopNav({ theme, toggleTheme, mobileOpen, setMobileOpen }){
+function TopNav({ theme, toggleTheme, mobileOpen, setMobileOpen, user, onOpenAuth, onLogout }){
   const links = [
     {href:"#/markets", label:"Markets"},
     {href:"#/dashboard", label:"Dashboard"},
@@ -361,6 +461,7 @@ function TopNav({ theme, toggleTheme, mobileOpen, setMobileOpen }){
     {href:"#/learn", label:"Learn"},
     {href:"#/business", label:"For Business"},
   ];
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
     <header className="sticky top-0 z-50 backdrop-blur bg-ink/85 hairline">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
@@ -380,7 +481,25 @@ function TopNav({ theme, toggleTheme, mobileOpen, setMobileOpen }){
           <button onClick={toggleTheme} className="w-9 h-9 flex items-center justify-center rounded-lg border border-hair text-dim hover:text-current" aria-label="Toggle theme">
             {theme==="dark" ? I.sun : I.moon}
           </button>
-          <button onClick={()=>nav("#/dashboard")} className="hidden sm:block bg-accent text-sm font-medium px-4 py-2 rounded-lg">Get Started</button>
+
+          {user ? (
+            <div className="relative hidden sm:block">
+              <button onClick={()=>setMenuOpen(o=>!o)} className="flex items-center gap-2 border border-hair rounded-lg pl-1.5 pr-3 py-1.5">
+                <span className="w-6 h-6 rounded-full bg-accent flex items-center justify-center text-xs font-semibold">{user.name?.[0]?.toUpperCase() || "U"}</span>
+                <span className="text-sm">{user.name?.split(" ")[0]}</span>
+              </button>
+              {menuOpen && (
+                <div className="absolute right-0 mt-2 w-44 card p-1.5 shadow-xl">
+                  <a href="#/dashboard" onClick={()=>setMenuOpen(false)} className="block px-3 py-2 text-sm rounded-lg hover:bg-surface2">Dashboard</a>
+                  <a href="#/portfolio" onClick={()=>setMenuOpen(false)} className="block px-3 py-2 text-sm rounded-lg hover:bg-surface2">Portfolio</a>
+                  <button onClick={()=>{setMenuOpen(false); onLogout();}} className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-surface2 text-neg">Log out</button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button onClick={onOpenAuth} className="hidden sm:block bg-accent text-sm font-medium px-4 py-2 rounded-lg">Get Started</button>
+          )}
+
           <button className="lg:hidden w-9 h-9 flex items-center justify-center rounded-lg border border-hair" onClick={()=>setMobileOpen(!mobileOpen)}>
             {mobileOpen ? I.close : I.menu}
           </button>
@@ -389,7 +508,14 @@ function TopNav({ theme, toggleTheme, mobileOpen, setMobileOpen }){
       {mobileOpen && (
         <div className="lg:hidden hairline px-4 pb-4 flex flex-col gap-1">
           {links.map(l=> <a key={l.href} href={l.href} onClick={()=>setMobileOpen(false)} className="py-2.5 text-sm text-dim hover:text-current border-b border-hair">{l.label}</a>)}
-          <button onClick={()=>{nav("#/dashboard");setMobileOpen(false);}} className="mt-3 bg-accent text-sm font-medium px-4 py-2 rounded-lg">Get Started</button>
+          {user ? (
+            <>
+              <p className="text-xs text-dim mt-3">Signed in as {user.name}</p>
+              <button onClick={()=>{onLogout(); setMobileOpen(false);}} className="mt-2 border border-hair text-neg text-sm font-medium px-4 py-2 rounded-lg">Log out</button>
+            </>
+          ) : (
+            <button onClick={()=>{onOpenAuth(); setMobileOpen(false);}} className="mt-3 bg-accent text-sm font-medium px-4 py-2 rounded-lg">Get Started</button>
+          )}
         </div>
       )}
     </header>
@@ -1336,6 +1462,9 @@ function App(){
   const [toasts, setToasts] = useState([]);
   const [status, setStatus] = useState({ state: "checking" });
   const [, forceUpdate] = useState(0);
+  const [user, setUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
 
   useEffect(()=>{ document.documentElement.className = theme==="light" ? "light" : ""; },[theme]);
 
@@ -1350,6 +1479,29 @@ function App(){
       forceUpdate(n=>n+1); // re-render so components pick up the mutated MARKETS values
     });
   }, []);
+
+  // Real session persistence: if a token was saved from a previous visit,
+  // ask the backend to confirm it's still valid before trusting it.
+  useEffect(()=>{
+    const saved = localStorage.getItem(TOKEN_KEY);
+    if(!saved){ setAuthChecked(true); return; }
+    apiMe(saved)
+      .then(u => setUser(u))
+      .catch(() => localStorage.removeItem(TOKEN_KEY))
+      .finally(() => setAuthChecked(true));
+  }, []);
+
+  const handleAuthed = (token, user)=>{
+    localStorage.setItem(TOKEN_KEY, token);
+    setUser(user);
+    setAuthModalOpen(false);
+    pushToast(`Welcome, ${user.name.split(" ")[0]}. You're signed in for real, this account lives in the database.`);
+  };
+  const handleLogout = ()=>{
+    localStorage.removeItem(TOKEN_KEY);
+    setUser(null);
+    pushToast("You've been logged out.");
+  };
 
   const toggleWatch = (id)=> setWatchlist(w=> w.includes(id) ? w.filter(x=>x!==id) : [...w, id]);
   const addAlert = (a)=> { setAlerts(al=>[...al, {...a, id:Date.now()}]); pushToast(`Alert created for ${MARKETS.find(m=>m.id===a.marketId).name}`); };
@@ -1399,12 +1551,17 @@ function App(){
   return (
     <div className="min-h-screen pb-16 lg:pb-0">
       <StatusBanner status={status} />
-      <TopNav theme={theme} toggleTheme={()=>setTheme(t=>t==="dark"?"light":"dark")} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
+      <TopNav
+        theme={theme} toggleTheme={()=>setTheme(t=>t==="dark"?"light":"dark")}
+        mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}
+        user={user} onOpenAuth={()=>setAuthModalOpen(true)} onLogout={handleLogout}
+      />
       {page}
       <Footer/>
       <MobileTabBar/>
       <Toast toasts={toasts} />
       {alertModal && <AlertModal marketId={alertModal} onClose={()=>setAlertModal(null)} addAlert={addAlert} />}
+      {authModalOpen && <AuthModal onClose={()=>setAuthModalOpen(false)} onAuthed={handleAuthed} initialMode="signup" />}
     </div>
   );
 }
