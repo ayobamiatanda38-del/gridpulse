@@ -52,6 +52,7 @@
   @keyframes toastIn{ from{ opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);} }
   input[type=range]{ accent-color:var(--accent); }
   .no-scrollbar::-webkit-scrollbar{ display:none; }
+  .status-banner{ font-size:12px; padding:6px 0; text-align:center; border-bottom:1px solid var(--border); }
 </style>
 </head>
 <body>
@@ -60,6 +61,10 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef, createContext, useContext } = React;
 const { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, LineChart, Line } = Recharts;
+
+/* ============================= LIVE BACKEND CONNECTION ============================= */
+// Your real Render backend. Change this if you ever redeploy under a new URL.
+const API_BASE = "https://gridpulse-kyss.onrender.com";
 
 /* ============================= ICONS ============================= */
 const Icon = ({ path, className="w-4 h-4", strokeW=1.8 }) => (
@@ -91,7 +96,7 @@ const I = {
   trash: <Icon path={<><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></>} />,
 };
 
-/* ============================= DEMO DATA ENGINE ============================= */
+/* ============================= DEMO DATA ENGINE (used as fallback + chart/driver detail) ============================= */
 function hashSeed(str){ let h=0; for(let i=0;i<str.length;i++){ h=(Math.imul(31,h)+str.charCodeAt(i))|0; } return h; }
 function mulberry32(seed){
   return function(){
@@ -121,18 +126,14 @@ function generateSeries(def, hours=168){
   for(let h=hours-1; h>=0; h--){
     const t = now - h*3600*1000;
     const hourOfDay = new Date(t).getHours();
-    // solar dip mid-day, scaled by renewable share
     const solarDip = def.renewShare * 0.5 * Math.max(0, Math.sin(Math.PI*(hourOfDay-6)/12)) * (hourOfDay>6 && hourOfDay<19 ? 1:0);
-    // evening peak
     const eveningPeak = (hourOfDay>=17 && hourOfDay<=21) ? 0.30*Math.exp(-Math.pow(hourOfDay-19,2)/3) : 0;
-    // night trough
     const nightDip = (hourOfDay>=1 && hourOfDay<=5) ? 0.18 : 0;
     walk += (rnd()-0.5)*0.06;
     walk = Math.max(-0.35, Math.min(0.35, walk));
     const noise = (rnd()-0.5)*0.08;
     let mult = 1 - solarDip + eveningPeak - nightDip + walk + noise;
     let price = def.base * mult;
-    // occasional negative-price event for high-renewable markets
     if(def.renewShare>0.5 && hourOfDay>=11 && hourOfDay<=14 && rnd()<0.06){ price = -Math.abs(price*0.15) - rnd()*8; }
     series.push({ t, price: Math.round(price*100)/100, hour: hourOfDay });
   }
@@ -178,10 +179,50 @@ function buildMarket(def){
     ath: Math.round(Math.max(...series.map(p=>p.price))*1.32*100)/100,
     atl: Math.round(Math.min(...series.map(p=>p.price))*0.55*100)/100,
     lastUpdated: new Date(last.t),
+    source: "demo",
   };
 }
 
+// This array is created once, then updated IN PLACE (object properties overwritten)
+// once real numbers arrive from the backend. Components below read from it directly,
+// so a mutation here plus a re-render is enough to show live values everywhere,
+// without threading new props through every single component.
 const MARKETS = MARKET_DEFS.map(buildMarket);
+
+/**
+ * Pulls current price + change stats from the real backend and overwrites the
+ * matching demo objects in place. Chart shape, drivers, and hourly heatmap stay
+ * on local demo data for now — the backend doesn't generate those yet, see the
+ * project README for what full parity would need.
+ */
+async function syncLiveMarkets(onResult){
+  try{
+    const res = await fetch(`${API_BASE}/markets`);
+    if(!res.ok) throw new Error("backend responded with " + res.status);
+    const data = await res.json();
+    const list = data.markets || [];
+    let matched = 0;
+    list.forEach(bm=>{
+      const local = MARKETS.find(m=>m.id===bm.id);
+      if(local && typeof bm.current === "number"){
+        local.current = bm.current;
+        local.change24 = bm.change24;
+        local.change7d = bm.change7d;
+        local.volatility = bm.volatility;
+        local.todayHigh = bm.todayHigh;
+        local.todayLow = bm.todayLow;
+        local.avg = bm.average ?? local.avg;
+        local.prevClose = bm.prevClose;
+        local.lastUpdated = bm.lastUpdated ? new Date(bm.lastUpdated) : local.lastUpdated;
+        local.source = bm.isDemo ? "backend-demo" : "live";
+        matched++;
+      }
+    });
+    onResult({ ok: true, matched, mode: data.mode });
+  } catch(err){
+    onResult({ ok: false, error: err.message });
+  }
+}
 
 /* ============================= HELPERS ============================= */
 function fmt(n, currency="€"){
@@ -290,6 +331,26 @@ function Modal({ title, onClose, children, wide }){
   );
 }
 
+/* ============================= STATUS BANNER ============================= */
+function StatusBanner({ status }){
+  if(status.state === "checking"){
+    return <div className="status-banner text-dim bg-surface2">Connecting to the live backend…</div>;
+  }
+  if(status.state === "live"){
+    return (
+      <div className="status-banner bg-surface2" style={{color:"var(--positive)"}}>
+        ● Connected to the live backend at {API_BASE.replace("https://","")} — {status.matched} markets synced
+        {status.mode === "demo" ? " (backend is currently running on its own demo data)" : ""}
+      </div>
+    );
+  }
+  return (
+    <div className="status-banner bg-surface2" style={{color:"var(--warning)"}}>
+      ● Couldn't reach the live backend just now ({status.error}). Showing local demo data instead — free Render services fall asleep after inactivity, so the very first request can take up to a minute. Try refreshing shortly.
+    </div>
+  );
+}
+
 /* ============================= NAV ============================= */
 function TopNav({ theme, toggleTheme, mobileOpen, setMobileOpen }){
   const links = [
@@ -378,7 +439,7 @@ function Footer(){
         <div>
           <p className="text-xs uppercase tracking-wide text-dim mb-3 font-mono">Data & Trust</p>
           <div className="flex flex-col gap-2 text-sm text-dim">
-            <span>Demo market data</span>
+            <span>Live where connected, demo otherwise</span>
             <span>Simulation only, no real funds</span>
             <span>Not financial advice</span>
           </div>
@@ -403,7 +464,7 @@ function HeroChart(){
         <div>
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-signal pulse-dot"></span>
-            <span className="text-xs text-dim font-mono uppercase tracking-wide">Demo Market Data</span>
+            <span className="text-xs text-dim font-mono uppercase tracking-wide">{m.source==="live" ? "Live Market Data" : "Demo Market Data"}</span>
           </div>
           <p className="font-display text-lg mt-1">{m.label}</p>
         </div>
@@ -436,7 +497,7 @@ function Landing(){
       <section className="max-w-7xl mx-auto px-4 sm:px-6 pt-14 sm:pt-20 pb-16 grid lg:grid-cols-2 gap-12 items-center">
         <div>
           <div className="flex items-center gap-2 mb-5">
-            <Tag tone="accent">8 live markets · demo data</Tag>
+            <Tag tone="accent">8 markets · live where connected</Tag>
           </div>
           <h1 className="font-display text-4xl sm:text-5xl leading-[1.08] tracking-tight mb-5">
             Electricity prices,<br/>finally something<br/>you can actually read.
@@ -548,7 +609,7 @@ function Landing(){
         <div className="card p-8 grid sm:grid-cols-3 gap-8">
           <div>
             <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">Data</p>
-            <p className="text-sm leading-relaxed text-dim">This preview runs on seeded demo data shaped like real day-ahead markets. Anything not yet wired to a licensed feed is clearly labeled.</p>
+            <p className="text-sm leading-relaxed text-dim">Prices come from a real backend when it's reachable, and fall back to seeded demo data shaped like real day-ahead markets otherwise. Anything not yet wired to a licensed feed is clearly labeled.</p>
           </div>
           <div>
             <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">Trading</p>
@@ -595,7 +656,7 @@ function MarketsPage({ watchlist, toggleWatch }){
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10">
       <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">Markets</p>
       <h1 className="font-display text-3xl mb-2">Electricity Markets</h1>
-      <p className="text-dim mb-8">Track electricity prices across major markets, updated from demo data shaped like real day-ahead pricing.</p>
+      <p className="text-dim mb-8">Track electricity prices across major markets, live where the backend is connected.</p>
 
       <div className="flex flex-col sm:flex-row gap-3 mb-6">
         <div className="flex items-center gap-2 border border-hair rounded-lg px-3 py-2 flex-1 max-w-sm">
@@ -634,7 +695,7 @@ function MarketsPage({ watchlist, toggleWatch }){
                     <span className="w-8 h-8 rounded-lg bg-surface2 border border-hair flex items-center justify-center text-xs font-mono">{m.id.toUpperCase()}</span>
                     <div>
                       <p className="text-sm font-medium">{m.label}</p>
-                      <p className="text-xs text-dim">{m.name}</p>
+                      <p className="text-xs text-dim">{m.name}{m.source==="live" ? " · live" : ""}</p>
                     </div>
                   </a>
                 </td>
@@ -715,7 +776,7 @@ function MarketDetail({ id, watchlist, toggleWatch, openAlertModal, goTrade }){
             <span className="w-10 h-10 rounded-lg bg-surface2 border border-hair flex items-center justify-center text-xs font-mono">{m.id.toUpperCase()}</span>
             <div>
               <h1 className="font-display text-2xl">{m.label}</h1>
-              <p className="text-dim text-xs">Last updated {timeAgo(m.lastUpdated)} · Demo Market Data</p>
+              <p className="text-dim text-xs">Last updated {timeAgo(m.lastUpdated)} · {m.source==="live" ? "Live" : "Demo"} Market Data</p>
             </div>
           </div>
           <div className="flex items-baseline gap-3">
@@ -768,7 +829,7 @@ function MarketDetail({ id, watchlist, toggleWatch, openAlertModal, goTrade }){
             <div><p className="text-dim text-xs mb-0.5">~52W high</p><p className="font-mono">{fmt(m.ath, m.currency)}</p></div>
             <div><p className="text-dim text-xs mb-0.5">~52W low</p><p className="font-mono">{fmt(m.atl, m.currency)}</p></div>
           </div>
-          <p className="text-[11px] text-dim mt-4 leading-relaxed">52 week figures are approximated from the current demo dataset for illustration.</p>
+          <p className="text-[11px] text-dim mt-4 leading-relaxed">Chart shape, drivers, and 52 week figures are illustrative demo detail. Price, 24h/7d change, and volatility above reflect the live backend when connected.</p>
         </div>
       </div>
 
@@ -1273,8 +1334,22 @@ function App(){
   const [balance, setBalance] = useState(10000);
   const [tradeMarket, setTradeMarket] = useState("de");
   const [toasts, setToasts] = useState([]);
+  const [status, setStatus] = useState({ state: "checking" });
+  const [, forceUpdate] = useState(0);
 
   useEffect(()=>{ document.documentElement.className = theme==="light" ? "light" : ""; },[theme]);
+
+  // Kick off the real backend sync once, when the app first loads.
+  useEffect(()=>{
+    syncLiveMarkets((result)=>{
+      if(result.ok){
+        setStatus({ state: "live", matched: result.matched, mode: result.mode });
+      } else {
+        setStatus({ state: "offline", error: result.error });
+      }
+      forceUpdate(n=>n+1); // re-render so components pick up the mutated MARKETS values
+    });
+  }, []);
 
   const toggleWatch = (id)=> setWatchlist(w=> w.includes(id) ? w.filter(x=>x!==id) : [...w, id]);
   const addAlert = (a)=> { setAlerts(al=>[...al, {...a, id:Date.now()}]); pushToast(`Alert created for ${MARKETS.find(m=>m.id===a.marketId).name}`); };
@@ -1323,6 +1398,7 @@ function App(){
 
   return (
     <div className="min-h-screen pb-16 lg:pb-0">
+      <StatusBanner status={status} />
       <TopNav theme={theme} toggleTheme={()=>setTheme(t=>t==="dark"?"light":"dark")} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
       {page}
       <Footer/>
