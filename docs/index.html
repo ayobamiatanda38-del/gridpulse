@@ -1495,7 +1495,7 @@ function OnChainTradePage({ toast }){
   const [myPositions, setMyPositions] = useState([]);
   const [busy, setBusy] = useState(false);
 
-  const notDeployed = CONTRACT_ADDRESS === "0x41F2b632F06E2169D21C1bb9753421d9cC1fd94a";
+  const notDeployed = CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000";
 
   const handleConnect = async ()=>{
     setError(""); setConnecting(true);
