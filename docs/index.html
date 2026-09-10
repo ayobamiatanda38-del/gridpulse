@@ -11,6 +11,7 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
 <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
 <style>
   :root{
@@ -99,6 +100,64 @@ async function apiMe(token){
   const data = await res.json();
   if(!res.ok) throw new Error(data.message || "Session expired.");
   return data.user;
+}
+
+/* ============================= ON-CHAIN (TESTNET) LAYER ============================= */
+// IMPORTANT: This talks to a smart contract on Sepolia, a public Ethereum
+// TEST network. The currency involved is free, worthless test ETH from a
+// faucet, never real money. Replace CONTRACT_ADDRESS below with your real
+// deployed address once you've deployed GridPulseTestnetTrading.sol via
+// Remix — see the deployment guide for exact steps.
+const CONTRACT_ADDRESS = "0x41F2b632F06E2169D21C1bb9753421d9cC1fd94a"; // <-- replace after deploying
+const SEPOLIA_CHAIN_ID = "0xaa36a7"; // 11155111 in hex
+
+const CONTRACT_ABI = [
+  "function owner() view returns (address)",
+  "function currentPrice(bytes32) view returns (uint256)",
+  "function positions(uint256) view returns (address trader, bytes32 marketId, bool isLong, uint256 stake, uint256 entryPrice, bool open)",
+  "function setPrice(bytes32 marketId, uint256 price) external",
+  "function openPosition(bytes32 marketId, bool isLong) external payable returns (uint256)",
+  "function closePosition(uint256 id) external",
+  "event PositionOpened(uint256 indexed id, address indexed trader, bytes32 indexed marketId, bool isLong, uint256 stake, uint256 entryPrice)",
+  "event PositionClosed(uint256 indexed id, address indexed trader, uint256 exitPrice, uint256 payout)",
+];
+
+async function ensureSepolia(){
+  try {
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: SEPOLIA_CHAIN_ID }] });
+  } catch(switchError){
+    if(switchError.code === 4902){
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: SEPOLIA_CHAIN_ID,
+          chainName: "Sepolia Test Network",
+          nativeCurrency: { name: "Sepolia ETH", symbol: "ETH", decimals: 18 },
+          rpcUrls: ["https://rpc.sepolia.org"],
+          blockExplorerUrls: ["https://sepolia.etherscan.io"],
+        }],
+      });
+    } else {
+      throw switchError;
+    }
+  }
+}
+
+async function connectWallet(){
+  if(!window.ethereum){
+    throw new Error("No wallet extension found. Install MetaMask from metamask.io, then try again.");
+  }
+  const provider = new ethers.BrowserProvider(window.ethereum);
+  await provider.send("eth_requestAccounts", []);
+  await ensureSepolia();
+  const signer = await provider.getSigner();
+  const address = await signer.getAddress();
+  const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+  return { provider, signer, address, contract };
+}
+
+function marketToBytes32(marketId){
+  return ethers.encodeBytes32String(marketId);
 }
 
 /* ============================= ICONS ============================= */
@@ -460,6 +519,7 @@ function TopNav({ theme, toggleTheme, mobileOpen, setMobileOpen, user, onOpenAut
     {href:"#/portfolio", label:"Portfolio"},
     {href:"#/learn", label:"Learn"},
     {href:"#/business", label:"For Business"},
+    {href:"#/onchain", label:"On-Chain"},
   ];
   const [menuOpen, setMenuOpen] = useState(false);
   return (
@@ -1421,6 +1481,209 @@ function BusinessPage(){
   );
 }
 
+/* ============================= ON-CHAIN TRADING (TESTNET) ============================= */
+function OnChainTradePage({ toast }){
+  const [wallet, setWallet] = useState(null); // {address, provider, signer, contract}
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState("");
+  const [marketId, setMarketId] = useState("de");
+  const [onChainPrice, setOnChainPrice] = useState(null);
+  const [isOwner, setIsOwner] = useState(false);
+  const [ownerPriceInput, setOwnerPriceInput] = useState("");
+  const [stake, setStake] = useState("0.01");
+  const [direction, setDirection] = useState("long");
+  const [myPositions, setMyPositions] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  const notDeployed = CONTRACT_ADDRESS === "0x41F2b632F06E2169D21C1bb9753421d9cC1fd94a";
+
+  const handleConnect = async ()=>{
+    setError(""); setConnecting(true);
+    try{
+      const w = await connectWallet();
+      setWallet(w);
+      const ownerAddr = await w.contract.owner();
+      setIsOwner(ownerAddr.toLowerCase() === w.address.toLowerCase());
+      toast("Wallet connected on the Sepolia test network.");
+    } catch(err){
+      setError(err.message);
+    } finally { setConnecting(false); }
+  };
+
+  useEffect(()=>{
+    if(!wallet) return;
+    let cancelled = false;
+    (async ()=>{
+      try{
+        const raw = await wallet.contract.currentPrice(marketToBytes32(marketId));
+        if(!cancelled) setOnChainPrice(raw > 0n ? Number(raw)/1e8 : null);
+      } catch(e){ /* contract not deployed yet, or network hiccup — leave price as null */ }
+    })();
+    return ()=>{ cancelled = true; };
+  }, [wallet, marketId]);
+
+  const refreshMyPositions = async ()=>{
+    if(!wallet) return;
+    try{
+      const openedFilter = wallet.contract.filters.PositionOpened(null, wallet.address);
+      const events = await wallet.contract.queryFilter(openedFilter, 0, "latest");
+      const list = [];
+      for(const ev of events){
+        const id = ev.args.id;
+        const pos = await wallet.contract.positions(id);
+        if(pos.open){
+          list.push({
+            id: id.toString(),
+            marketId: ethers.decodeBytes32String(pos.marketId),
+            isLong: pos.isLong,
+            stake: ethers.formatEther(pos.stake),
+            entryPrice: Number(pos.entryPrice)/1e8,
+          });
+        }
+      }
+      setMyPositions(list);
+    } catch(e){ console.error(e); }
+  };
+
+  useEffect(()=>{ if(wallet) refreshMyPositions(); }, [wallet]);
+
+  const handleOpen = async ()=>{
+    if(!wallet) return;
+    setBusy(true); setError("");
+    try{
+      const value = ethers.parseEther(String(stake));
+      const tx = await wallet.contract.openPosition(marketToBytes32(marketId), direction==="long", { value });
+      toast("Transaction sent, waiting for confirmation…");
+      await tx.wait();
+      toast("Position opened on-chain.");
+      await refreshMyPositions();
+    } catch(err){
+      setError(err.shortMessage || err.message);
+    } finally { setBusy(false); }
+  };
+
+  const handleClose = async (id)=>{
+    if(!wallet) return;
+    setBusy(true); setError("");
+    try{
+      const tx = await wallet.contract.closePosition(id);
+      toast("Closing position, waiting for confirmation…");
+      await tx.wait();
+      toast("Position closed. Check your wallet for the payout.");
+      await refreshMyPositions();
+    } catch(err){
+      setError(err.shortMessage || err.message);
+    } finally { setBusy(false); }
+  };
+
+  const handleSetPrice = async ()=>{
+    if(!wallet || !ownerPriceInput) return;
+    setBusy(true); setError("");
+    try{
+      const scaled = BigInt(Math.round(Number(ownerPriceInput) * 1e8));
+      const tx = await wallet.contract.setPrice(marketToBytes32(marketId), scaled);
+      toast("Updating the on-chain price…");
+      await tx.wait();
+      toast("Price updated on-chain.");
+      const raw = await wallet.contract.currentPrice(marketToBytes32(marketId));
+      setOnChainPrice(Number(raw)/1e8);
+    } catch(err){
+      setError(err.shortMessage || err.message);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10">
+      <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">On-Chain Trading</p>
+      <h1 className="font-display text-3xl mb-2">Testnet Wallet Trading</h1>
+      <p className="text-dim mb-6 max-w-2xl">
+        This page talks to a real smart contract on Sepolia, a public Ethereum test network. Everything here uses free, worthless test ETH from a faucet, never real money, and never will unless this contract is deliberately redeployed to a real network after proper legal review.
+      </p>
+
+      {notDeployed && (
+        <div className="card p-4 mb-6" style={{borderLeft:"3px solid var(--warning)"}}>
+          <p className="text-sm">The contract address hasn't been set yet. Deploy <span className="font-mono text-xs">GridPulseTestnetTrading.sol</span> via Remix, then paste the deployed address into <span className="font-mono text-xs">CONTRACT_ADDRESS</span> near the top of this file's script.</p>
+        </div>
+      )}
+
+      {!wallet ? (
+        <div className="card p-6 text-center">
+          <p className="text-dim text-sm mb-4">Connect a wallet to open or close on-chain testnet positions.</p>
+          <button onClick={handleConnect} disabled={connecting} className="bg-accent px-5 py-2.5 rounded-lg font-medium disabled:opacity-50">
+            {connecting ? "Connecting…" : "Connect Wallet"}
+          </button>
+          {error && <p className="text-neg text-xs mt-3">{error}</p>}
+        </div>
+      ) : (
+        <>
+          <div className="card p-4 mb-6 flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <p className="text-xs text-dim">Connected wallet</p>
+              <p className="font-mono text-sm">{wallet.address.slice(0,6)}…{wallet.address.slice(-4)}</p>
+            </div>
+            <Tag tone="pos">Sepolia Testnet</Tag>
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-6 mb-6">
+            <div className="card p-5">
+              <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">Market</p>
+              <select value={marketId} onChange={e=>setMarketId(e.target.value)} className="w-full bg-surface2 border border-hair rounded-lg px-3 py-2 text-sm mb-4">
+                {MARKETS.map(mk => <option key={mk.id} value={mk.id}>{mk.label}</option>)}
+              </select>
+              <p className="text-xs text-dim mb-1">On-chain price for this market</p>
+              <p className="font-mono text-2xl mb-1">{onChainPrice!==null ? onChainPrice.toFixed(2) : "Not set yet"}</p>
+              <p className="text-[11px] text-dim leading-relaxed">This price is published manually by the contract owner on testnet. There is no live oracle wired in yet.</p>
+
+              {isOwner && (
+                <div className="mt-5 pt-4 hairline border-t">
+                  <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">Owner controls</p>
+                  <div className="flex gap-2">
+                    <input value={ownerPriceInput} onChange={e=>setOwnerPriceInput(e.target.value)} placeholder="e.g. 118.42" className="flex-1 bg-surface2 border border-hair rounded-lg px-3 py-2 text-sm font-mono" />
+                    <button onClick={handleSetPrice} disabled={busy} className="bg-accent px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50">Set price</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="card p-5">
+              <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">Open a position</p>
+              <div className="flex gap-2 mb-4">
+                <button onClick={()=>setDirection("long")} className={`flex-1 py-2 rounded-lg text-sm font-medium ${direction==="long"?"bg-signal text-white":"border border-hair text-dim"}`}>Long</button>
+                <button onClick={()=>setDirection("short")} className={`flex-1 py-2 rounded-lg text-sm font-medium ${direction==="short"?"text-white":"border border-hair text-dim"}`} style={direction==="short"?{background:"var(--negative)"}:{}}>Short</button>
+              </div>
+              <label className="text-xs text-dim">Stake (test ETH)</label>
+              <input value={stake} onChange={e=>setStake(e.target.value)} className="w-full bg-surface2 border border-hair rounded-lg px-3 py-2 text-sm mt-1 mb-4 font-mono" />
+              <button onClick={handleOpen} disabled={busy || onChainPrice===null} className="w-full bg-accent py-2.5 rounded-lg font-medium disabled:opacity-50">
+                {busy ? "Confirming…" : "Open On-Chain Position"}
+              </button>
+              {onChainPrice===null && <p className="text-[11px] text-dim mt-2">Waiting on a price for this market before trading can open.</p>}
+              {error && <p className="text-neg text-xs mt-3">{error}</p>}
+            </div>
+          </div>
+
+          <p className="text-xs uppercase tracking-wide text-dim font-mono mb-3">Your open on-chain positions</p>
+          {myPositions.length===0 ? (
+            <div className="card"><EmptyState title="No open on-chain positions" sub="Positions you open above will show up here, pulled directly from the blockchain." /></div>
+          ) : (
+            <div className="card divide-y divide-[var(--border)]">
+              {myPositions.map(p=>(
+                <div key={p.id} className="flex items-center justify-between px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <Tag tone={p.isLong?"pos":"neg"}>{p.isLong?"long":"short"}</Tag>
+                    <span className="text-xs text-dim font-mono">{p.marketId} · entry {p.entryPrice.toFixed(2)}</span>
+                    <span className="text-xs text-dim font-mono">stake {p.stake} ETH</span>
+                  </div>
+                  <button onClick={()=>handleClose(p.id)} disabled={busy} className="text-xs border border-hair rounded-md px-2 py-1 disabled:opacity-50">Close</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ============================= ALERT MODAL ============================= */
 function AlertModal({ marketId, onClose, addAlert }){
   const m = MARKETS.find(x=>x.id===marketId) || MARKETS[0];
@@ -1546,6 +1809,7 @@ function App(){
   else if(route==="#/portfolio") page = <PortfolioPage positions={positions} closePosition={closePosition} balance={balance} />;
   else if(route==="#/learn") page = <LearnPage/>;
   else if(route==="#/business") page = <BusinessPage/>;
+  else if(route==="#/onchain") page = <OnChainTradePage toast={pushToast} />;
   else page = <Landing/>;
 
   return (
