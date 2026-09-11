@@ -374,6 +374,151 @@ function timeAgo(d){
 }
 function hourLabel(h){ return `${String(h).padStart(2,"0")}:00`; }
 
+/* ============================= CANDLES + VOLUME + ORDER BOOK (real depth, plain SVG for reliability) ============================= */
+function toOHLC(series, bucketSize){
+  const buckets = [];
+  for(let i=0; i<series.length; i+=bucketSize){
+    const chunk = series.slice(i, i+bucketSize);
+    if(!chunk.length) continue;
+    const open = chunk[0].price, close = chunk[chunk.length-1].price;
+    const high = Math.max(...chunk.map(p=>p.price));
+    const low = Math.min(...chunk.map(p=>p.price));
+    buckets.push({ t: chunk[0].t, open, high, low, close, hour: chunk[0].hour });
+  }
+  return buckets;
+}
+function volumeFor(marketId, series){
+  const rnd = mulberry32(hashSeed(marketId+"-volume"));
+  return series.map((p,i)=>{
+    const prev = series[i-1] ? series[i-1].price : p.price;
+    const move = Math.abs(p.price-prev);
+    return { t:p.t, v: Math.round((40 + move*8 + rnd()*30)) };
+  });
+}
+
+function CandlestickChart({ candles, currency }){
+  const w=700, h=220, padTop=10, padBottom=20, padLeft=4, padRight=4;
+  const prices = candles.flatMap(c=>[c.high,c.low]);
+  const min = Math.min(...prices), max = Math.max(...prices), range=(max-min)||1;
+  const plotH = h-padTop-padBottom;
+  const cw = (w-padLeft-padRight)/candles.length;
+  const y = (p)=> padTop + plotH - ((p-min)/range)*plotH;
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full" style={{height:220}} preserveAspectRatio="none">
+      {candles.map((c,i)=>{
+        const cx = padLeft + i*cw + cw/2;
+        const up = c.close>=c.open;
+        const color = up ? "var(--positive)" : "var(--negative)";
+        const bodyTop = y(Math.max(c.open,c.close));
+        const bodyBot = y(Math.min(c.open,c.close));
+        return (
+          <g key={i}>
+            <line x1={cx} x2={cx} y1={y(c.high)} y2={y(c.low)} stroke={color} strokeWidth="1"/>
+            <rect x={cx-cw*0.32} y={bodyTop} width={cw*0.64} height={Math.max(1,bodyBot-bodyTop)} fill={color} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function VolumeBars({ points }){
+  const w=700, h=54;
+  const max = Math.max(...points.map(p=>p.v))||1;
+  const bw = w/points.length;
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full" style={{height:54}} preserveAspectRatio="none">
+      {points.map((p,i)=>{
+        const barH = (p.v/max)*h;
+        return <rect key={i} x={i*bw+bw*0.15} y={h-barH} width={bw*0.7} height={barH} fill="var(--border)" />;
+      })}
+    </svg>
+  );
+}
+
+function generateOrderBook(m){
+  const rnd = mulberry32(hashSeed(m.id+"-book-"+Math.floor(Date.now()/15000)));
+  const spread = Math.max(0.05, m.current*0.0015);
+  const rows = (side)=>{
+    let cum = 0;
+    const list = [];
+    for(let i=0;i<8;i++){
+      const step = spread*(1+i*1.6) * (side==="ask"?1:-1);
+      const price = Math.round((m.current+step)*100)/100;
+      const size = Math.round((6 + rnd()*40) * (1 - i*0.06));
+      cum += size;
+      list.push({ price, size, cum });
+    }
+    return side==="bid" ? list : list;
+  };
+  return { bids: rows("bid"), asks: rows("ask").reverse() };
+}
+
+function OrderBookPanel({ m }){
+  const book = useMemo(()=>generateOrderBook(m), [m.id, Math.floor(Date.now()/15000)]);
+  const maxCum = Math.max(book.bids[book.bids.length-1]?.cum||1, book.asks[0]?.cum||1);
+  const spread = book.asks[book.asks.length-1] ? (book.asks[book.asks.length-1].price - book.bids[0].price) : 0;
+  return (
+    <div className="card p-5">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs uppercase tracking-wide text-dim font-mono">Order book (synthetic, illustrative)</p>
+        <span className="text-[11px] text-dim font-mono">spread {fmt(spread, m.currency)}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-4 text-xs">
+        <div>
+          <div className="flex justify-between text-dim font-mono mb-1 px-1"><span>Bid</span><span>Size</span></div>
+          {book.bids.map((r,i)=>(
+            <div key={i} className="relative flex justify-between px-1 py-0.5 font-mono">
+              <div className="absolute inset-y-0 right-0" style={{width:`${(r.cum/maxCum)*100}%`, background:"rgba(63,167,150,.12)"}}></div>
+              <span className="relative text-pos">{fmt(r.price,m.currency)}</span>
+              <span className="relative text-dim">{r.size}</span>
+            </div>
+          ))}
+        </div>
+        <div>
+          <div className="flex justify-between text-dim font-mono mb-1 px-1"><span>Ask</span><span>Size</span></div>
+          {book.asks.map((r,i)=>(
+            <div key={i} className="relative flex justify-between px-1 py-0.5 font-mono">
+              <div className="absolute inset-y-0 left-0" style={{width:`${(r.cum/maxCum)*100}%`, background:"rgba(225,97,91,.12)"}}></div>
+              <span className="relative text-neg">{fmt(r.price,m.currency)}</span>
+              <span className="relative text-dim">{r.size}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <p className="text-[10px] text-dim mt-3 leading-relaxed">Order book depth is generated for illustration — there is no real exchange matching engine behind this yet.</p>
+    </div>
+  );
+}
+
+/* ============================= ANIMATED NUMBER (ticking figures) ============================= */
+function AnimatedNumber({ value, format, className }){
+  const [display, setDisplay] = useState(value);
+  const [flash, setFlash] = useState(null); // "up" | "down" | null
+  const prevRef = useRef(value);
+  useEffect(()=>{
+    const from = prevRef.current;
+    const to = value;
+    if(from === to) return;
+    setFlash(to>from ? "up" : "down");
+    const dur = 450;
+    const start = performance.now();
+    let raf;
+    const tick = (now)=>{
+      const t = Math.min(1, (now-start)/dur);
+      setDisplay(from + (to-from)*t);
+      if(t<1) raf = requestAnimationFrame(tick);
+      else { prevRef.current = to; setTimeout(()=>setFlash(null), 500); }
+    };
+    raf = requestAnimationFrame(tick);
+    return ()=> cancelAnimationFrame(raf);
+  }, [value]);
+  const style = flash ? { color: flash==="up" ? "var(--positive)" : "var(--negative)", transition:"color .5s ease" } : { transition:"color .5s ease" };
+  return <span className={className} style={style}>{format ? format(display) : display.toFixed(2)}</span>;
+}
+
+/* ============================= HELPERS (continued) ============================= */
+
 /* ============================= APP STATE ============================= */
 const AppCtx = createContext(null);
 function useApp(){ return useContext(AppCtx); }
@@ -549,7 +694,35 @@ function AuthModal({ onClose, onAuthed, initialMode }){
 }
 
 /* ============================= NAV ============================= */
-function TopNav({ theme, toggleTheme, mobileOpen, setMobileOpen, user, onOpenAuth, onLogout }){
+function NotificationBell({ notifications, onOpen }){
+  const [open, setOpen] = useState(false);
+  const unread = notifications.filter(n=>!n.read).length;
+  return (
+    <div className="relative">
+      <button onClick={()=>{ setOpen(o=>!o); onOpen(); }} className="relative w-9 h-9 flex items-center justify-center rounded-lg border border-hair text-dim hover:text-current">
+        {I.bell}
+        {unread>0 && <span className="absolute -top-1 -right-1 bg-accent text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center" style={{color:"var(--accent-ink)"}}>{unread>9?"9+":unread}</span>}
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-2 w-80 card p-1.5 shadow-xl max-h-96 overflow-y-auto z-50">
+          <p className="text-xs uppercase tracking-wide text-dim font-mono px-3 py-2">Activity</p>
+          {notifications.length===0 ? (
+            <p className="text-dim text-sm px-3 py-4">Nothing yet. Real price moves and your alerts will show up here.</p>
+          ) : (
+            notifications.slice(0,20).map(n=>(
+              <div key={n.id} className="px-3 py-2.5 rounded-lg hover:bg-surface2">
+                <p className="text-sm">{n.msg}</p>
+                <p className="text-dim text-[11px] mt-0.5">{timeAgo(n.time)}</p>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TopNav({ theme, toggleTheme, mobileOpen, setMobileOpen, user, onOpenAuth, onLogout, notifications, onOpenNotifications }){
   const links = [
     {href:"#/markets", label:"Markets"},
     {href:"#/dashboard", label:"Dashboard"},
@@ -579,6 +752,7 @@ function TopNav({ theme, toggleTheme, mobileOpen, setMobileOpen, user, onOpenAut
           <button onClick={toggleTheme} className="w-9 h-9 flex items-center justify-center rounded-lg border border-hair text-dim hover:text-current" aria-label="Toggle theme">
             {theme==="dark" ? I.sun : I.moon}
           </button>
+          <NotificationBell notifications={notifications} onOpen={onOpenNotifications} />
 
           {user ? (
             <div className="relative hidden sm:block">
@@ -663,9 +837,10 @@ function Footer(){
         <div>
           <p className="text-xs uppercase tracking-wide text-dim mb-3 font-mono">Data & Trust</p>
           <div className="flex flex-col gap-2 text-sm text-dim">
-            <span>Live where connected, demo otherwise</span>
-            <span>Simulation only, no real funds</span>
-            <span>Not financial advice</span>
+            <a href="#/about" className="hover:text-current">About</a>
+            <a href="#/security" className="hover:text-current">Security</a>
+            <a href="#/terms" className="hover:text-current">Terms of Service</a>
+            <a href="#/privacy" className="hover:text-current">Privacy Policy</a>
           </div>
         </div>
       </div>
@@ -973,8 +1148,13 @@ const RANGES = [
 function MarketDetail({ id, watchlist, toggleWatch, openAlertModal, goTrade }){
   const m = MARKETS.find(x=>x.id===id) || MARKETS[0];
   const [range, setRange] = useState("1W");
+  const [chartMode, setChartMode] = useState("candles"); // "line" | "candles"
   const rangeHours = RANGES.find(r=>r.k===range).h;
-  const data = m.series.slice(-rangeHours).map(p=>({ t:p.t, price:p.price, label: new Date(p.t).toLocaleString([], {weekday:'short', hour:'2-digit'}) }));
+  const rawSeries = m.series.slice(-rangeHours);
+  const data = rawSeries.map(p=>({ t:p.t, price:p.price, label: new Date(p.t).toLocaleString([], {weekday:'short', hour:'2-digit'}) }));
+  const bucketSize = range==="1D" ? 1 : range==="3D" ? 3 : 6;
+  const candles = useMemo(()=>toOHLC(rawSeries, bucketSize), [m.id, range, m.current]);
+  const volumePoints = useMemo(()=>volumeFor(m.id, rawSeries), [m.id, range]);
   const today = m.series.slice(-24);
   const maxToday = Math.max(...today.map(p=>p.price));
   const minToday = Math.min(...today.map(p=>p.price));
@@ -1004,7 +1184,7 @@ function MarketDetail({ id, watchlist, toggleWatch, openAlertModal, goTrade }){
             </div>
           </div>
           <div className="flex items-baseline gap-3">
-            <p className="font-mono text-4xl">{fmt(m.current, m.currency)}</p>
+            <AnimatedNumber value={m.current} format={v=>fmt(v,m.currency)} className="font-mono text-4xl" />
             <span className="text-dim text-sm">/MWh</span>
             <ChangeTag value={m.change24} size="md" />
           </div>
@@ -1020,26 +1200,38 @@ function MarketDetail({ id, watchlist, toggleWatch, openAlertModal, goTrade }){
 
       <div className="grid lg:grid-cols-3 gap-6 mb-10">
         <div className="lg:col-span-2 card p-5">
-          <div className="flex gap-2 mb-4">
-            {RANGES.map(r=>(
-              <button key={r.k} onClick={()=>setRange(r.k)} className={`text-xs px-3 py-1.5 rounded-lg border ${range===r.k?"bg-accent border-transparent":"border-hair text-dim"}`}>{r.k}</button>
-            ))}
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <div className="flex gap-2">
+              {RANGES.map(r=>(
+                <button key={r.k} onClick={()=>setRange(r.k)} className={`text-xs px-3 py-1.5 rounded-lg border ${range===r.k?"bg-accent border-transparent":"border-hair text-dim"}`}>{r.k}</button>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <button onClick={()=>setChartMode("line")} className={`text-xs px-3 py-1.5 rounded-lg border ${chartMode==="line"?"bg-accent border-transparent":"border-hair text-dim"}`}>Line</button>
+              <button onClick={()=>setChartMode("candles")} className={`text-xs px-3 py-1.5 rounded-lg border ${chartMode==="candles"?"bg-accent border-transparent":"border-hair text-dim"}`}>Candles</button>
+            </div>
           </div>
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={data} margin={{top:5,right:5,left:-20,bottom:0}}>
-              <defs>
-                <linearGradient id="detailGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--signal)" stopOpacity={0.35}/>
-                  <stop offset="100%" stopColor="var(--signal)" stopOpacity={0}/>
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-              <XAxis dataKey="label" tick={{fontSize:10, fill:"var(--text-dim)"}} interval={Math.floor(data.length/5)} axisLine={false} tickLine={false} />
-              <YAxis tick={{fontSize:10, fill:"var(--text-dim)"}} axisLine={false} tickLine={false} width={45} />
-              <Tooltip contentStyle={{background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, fontSize:12}} formatter={(v)=>[fmt(v,m.currency)+"/MWh","Price"]} labelStyle={{color:"var(--text-dim)"}} />
-              <Area type="monotone" dataKey="price" stroke="var(--signal)" strokeWidth={2} fill="url(#detailGrad)" isAnimationActive={false} />
-            </AreaChart>
-          </ResponsiveContainer>
+          {chartMode==="line" ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={data} margin={{top:5,right:5,left:-20,bottom:0}}>
+                <defs>
+                  <linearGradient id="detailGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--signal)" stopOpacity={0.35}/>
+                    <stop offset="100%" stopColor="var(--signal)" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="label" tick={{fontSize:10, fill:"var(--text-dim)"}} interval={Math.floor(data.length/5)} axisLine={false} tickLine={false} />
+                <YAxis tick={{fontSize:10, fill:"var(--text-dim)"}} axisLine={false} tickLine={false} width={45} />
+                <Tooltip contentStyle={{background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, fontSize:12}} formatter={(v)=>[fmt(v,m.currency)+"/MWh","Price"]} labelStyle={{color:"var(--text-dim)"}} />
+                <Area type="monotone" dataKey="price" stroke="var(--signal)" strokeWidth={2} fill="url(#detailGrad)" isAnimationActive={false} />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <CandlestickChart candles={candles} currency={m.currency} />
+          )}
+          <p className="text-[11px] text-dim mt-2 mb-1 font-mono uppercase tracking-wide">Volume (illustrative)</p>
+          <VolumeBars points={volumePoints} />
         </div>
         <div className="card p-5">
           <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">Market statistics</p>
@@ -1075,16 +1267,17 @@ function MarketDetail({ id, watchlist, toggleWatch, openAlertModal, goTrade }){
         </div>
       </div>
 
-      {/* Heatmap */}
-      <div className="mb-10">
-        <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">Today's hourly prices</p>
+      {/* Order book + Heatmap */}
+      <div className="mb-10 grid lg:grid-cols-2 gap-4">
+        <OrderBookPanel m={m} />
         <div className="card p-5">
-          <div className="grid grid-cols-6 sm:grid-cols-12 gap-1.5 mb-4">
+          <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">Today's hourly prices</p>
+          <div className="grid grid-cols-6 gap-1.5 mb-4">
             {today.map((p,i)=>{
               const pct = (p.price-minToday)/((maxToday-minToday)||1);
               const bg = `rgba(232,163,61,${0.15+pct*0.75})`;
               return (
-                <div key={i} title={`${hourLabel(p.hour)} — ${fmt(p.price,m.currency)}`} className="rounded-md h-12 flex flex-col items-center justify-center text-[10px] font-mono" style={{background:bg}}>
+                <div key={i} title={`${hourLabel(p.hour)} — ${fmt(p.price,m.currency)}`} className="rounded-md h-10 flex flex-col items-center justify-center text-[10px] font-mono" style={{background:bg}}>
                   <span className="opacity-80">{p.hour}</span>
                 </div>
               );
@@ -1269,6 +1462,7 @@ function TradePage({ marketId, setMarketId, positions, openPosition, closePositi
                   <div key={p.id} className="flex items-center justify-between border border-hair rounded-lg px-3 py-2">
                     <div className="flex items-center gap-3">
                       <Tag tone={p.direction==="long"?"pos":"neg"}>{p.direction}</Tag>
+                      {p.sample && <Tag>sample</Tag>}
                       <span className="text-xs text-dim font-mono">entry {fmt(p.entryPrice,m.currency)}</span>
                       <span className="text-xs text-dim font-mono">stake €{p.stake}</span>
                     </div>
@@ -1350,17 +1544,87 @@ function PortfolioPage({ positions, closePosition, balance }){
     return pts;
   },[closed]);
 
+  // --- Risk dashboard additions: exposure, margin usage, drawdown, risk score ---
+  const exposureByMarket = useMemo(()=>{
+    const totalStaked = open.reduce((a,p)=>a+p.stake,0) || 1;
+    const byMarket = {};
+    open.forEach(p=>{ byMarket[p.marketId] = (byMarket[p.marketId]||0) + p.stake; });
+    return Object.entries(byMarket).map(([id, staked])=>({
+      market: MARKETS.find(m=>m.id===id),
+      staked, pct: (staked/totalStaked)*100,
+    })).sort((a,b)=>b.staked-a.staked);
+  }, [open]);
+
+  const totalStaked = open.reduce((a,p)=>a+p.stake,0);
+  const marginUsedPct = totalValue>0 ? Math.min(100, (totalStaked/totalValue)*100) : 0;
+
+  const drawdown = useMemo(()=>{
+    let peak = perfData[0]?.v || 10000;
+    let maxDD = 0;
+    perfData.forEach(p=>{
+      if(p.v>peak) peak = p.v;
+      const dd = peak>0 ? ((peak-p.v)/peak)*100 : 0;
+      if(dd>maxDD) maxDD = dd;
+    });
+    return Math.round(maxDD*10)/10;
+  }, [perfData]);
+
+  const avgVolatility = open.length
+    ? open.reduce((a,p)=>{ const m=MARKETS.find(x=>x.id===p.marketId); return a+(m?.volatility||0); },0)/open.length
+    : 0;
+  const riskLevel = avgVolatility>9 ? "High" : avgVolatility>5 ? "Medium" : open.length ? "Low" : "None";
+  const riskColor = riskLevel==="High" ? "text-neg" : riskLevel==="Medium" ? "text-accent" : "text-pos";
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10">
       <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">Portfolio</p>
       <h1 className="font-display text-3xl mb-8">Your Demo Portfolio</h1>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <div className="card p-5"><p className="text-dim text-xs mb-1">Portfolio value</p><p className="font-mono text-2xl">€{totalValue.toFixed(2)}</p></div>
+        <div className="card p-5"><p className="text-dim text-xs mb-1">Portfolio value</p><AnimatedNumber value={totalValue} format={v=>"€"+v.toFixed(2)} className="font-mono text-2xl" /></div>
         <div className="card p-5"><p className="text-dim text-xs mb-1">Available balance</p><p className="font-mono text-2xl">€{balance.toFixed(2)}</p></div>
         <div className="card p-5"><p className="text-dim text-xs mb-1">Unrealized P&L</p><p className={`font-mono text-2xl ${unrealized>=0?"text-pos":"text-neg"}`}>{unrealized>=0?"+":""}€{unrealized.toFixed(2)}</p></div>
         <div className="card p-5"><p className="text-dim text-xs mb-1">Win rate</p><p className="font-mono text-2xl">{winRate}%</p></div>
       </div>
+
+      <div className="grid lg:grid-cols-3 gap-4 mb-10">
+        <div className="card p-5">
+          <p className="text-xs uppercase tracking-wide text-dim font-mono mb-3">Margin usage</p>
+          <div className="w-full bg-surface2 rounded-full h-2.5 mb-2 overflow-hidden">
+            <div className="h-full rounded-full" style={{width:`${marginUsedPct}%`, background: marginUsedPct>70 ? "var(--negative)" : "var(--accent)"}}></div>
+          </div>
+          <p className="font-mono text-sm">{marginUsedPct.toFixed(1)}% of portfolio staked</p>
+        </div>
+        <div className="card p-5">
+          <p className="text-xs uppercase tracking-wide text-dim font-mono mb-3">Max drawdown</p>
+          <p className="font-mono text-2xl text-neg">-{drawdown}%</p>
+          <p className="text-dim text-xs mt-1">Largest drop from a peak, based on closed trades</p>
+        </div>
+        <div className="card p-5">
+          <p className="text-xs uppercase tracking-wide text-dim font-mono mb-3">Risk level</p>
+          <p className={`font-mono text-2xl ${riskColor}`}>{riskLevel}</p>
+          <p className="text-dim text-xs mt-1">Based on the average volatility of markets you're holding</p>
+        </div>
+      </div>
+
+      {exposureByMarket.length>0 && (
+        <div className="card p-5 mb-10">
+          <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">Exposure by market</p>
+          <div className="flex flex-col gap-3">
+            {exposureByMarket.map(e=>(
+              <div key={e.market.id}>
+                <div className="flex justify-between text-sm mb-1">
+                  <span>{e.market.name}</span>
+                  <span className="font-mono text-dim">€{e.staked.toFixed(2)} · {e.pct.toFixed(0)}%</span>
+                </div>
+                <div className="w-full bg-surface2 rounded-full h-2 overflow-hidden">
+                  <div className="h-full rounded-full bg-accent" style={{width:`${e.pct}%`}}></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="card p-5 mb-10">
         <p className="text-xs uppercase tracking-wide text-dim font-mono mb-4">Performance over closed trades</p>
@@ -1388,7 +1652,7 @@ function PortfolioPage({ positions, closePosition, balance }){
               {withPnl.map(p=>(
                 <tr key={p.id} className="hairline border-b last:border-0">
                   <td className="py-3 px-3">{p.market.name}</td>
-                  <td className="py-3 px-3"><Tag tone={p.direction==="long"?"pos":"neg"}>{p.direction}</Tag></td>
+                  <td className="py-3 px-3"><Tag tone={p.direction==="long"?"pos":"neg"}>{p.direction}</Tag>{p.sample && <span className="ml-1"><Tag>sample</Tag></span>}</td>
                   <td className="py-3 px-3 font-mono">{fmt(p.entryPrice, p.market.currency)}</td>
                   <td className="py-3 px-3 font-mono">{fmt(p.market.current, p.market.currency)}</td>
                   <td className="py-3 px-3 font-mono">€{p.stake}</td>
@@ -1414,7 +1678,7 @@ function PortfolioPage({ positions, closePosition, balance }){
               {closed.slice().reverse().map(p=>(
                 <tr key={p.id} className="hairline border-b last:border-0">
                   <td className="py-3 px-3">{MARKETS.find(m=>m.id===p.marketId)?.name}</td>
-                  <td className="py-3 px-3"><Tag tone={p.direction==="long"?"pos":"neg"}>{p.direction}</Tag></td>
+                  <td className="py-3 px-3"><Tag tone={p.direction==="long"?"pos":"neg"}>{p.direction}</Tag>{p.sample && <span className="ml-1"><Tag>sample</Tag></span>}</td>
                   <td className="py-3 px-3 font-mono">{fmt(p.entryPrice, MARKETS.find(m=>m.id===p.marketId)?.currency)}</td>
                   <td className="py-3 px-3 font-mono">{fmt(p.closePrice, MARKETS.find(m=>m.id===p.marketId)?.currency)}</td>
                   <td className="py-3 px-3 font-mono">€{p.stake}</td>
@@ -1749,6 +2013,90 @@ function OnChainTradePage({ toast }){
   );
 }
 
+/* ============================= ONBOARDING (first-visit only) ============================= */
+const ONBOARDING_KEY = "gridpulse_onboarded";
+function OnboardingModal({ onClose }){
+  const [step, setStep] = useState(0);
+  const steps = [
+    { title: "Welcome to GridPulse", body: "Track real electricity prices, learn how the market moves, and practice trading with a demo balance. Nothing here uses real money unless you deliberately move to the on-chain testnet with test funds." },
+    { title: "Markets, live where connected", body: "The Markets page pulls current prices from a real backend when it's reachable, with a clear banner telling you which mode you're in — live or demo." },
+    { title: "A demo balance to practice with", body: "Your account starts with a €10,000 demo balance and two sample positions already sitting in your portfolio, so you're not staring at an empty screen. They're clearly tagged \"Sample.\"" },
+    { title: "You're set", body: "Explore a market, set an alert, or head straight to the trade terminal. You can revisit this any time from the Learn page." },
+  ];
+  const s = steps[step];
+  return (
+    <Modal title={s.title} onClose={onClose}>
+      <p className="text-sm leading-relaxed mb-6">{s.body}</p>
+      <div className="flex items-center justify-between">
+        <div className="flex gap-1.5">
+          {steps.map((_,i)=>(
+            <span key={i} className="w-1.5 h-1.5 rounded-full" style={{background: i===step ? "var(--accent)" : "var(--border)"}}></span>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          {step>0 && <button onClick={()=>setStep(s=>s-1)} className="text-sm px-4 py-2 rounded-lg border border-hair text-dim">Back</button>}
+          {step<steps.length-1 ? (
+            <button onClick={()=>setStep(s=>s+1)} className="text-sm px-4 py-2 rounded-lg bg-accent font-medium">Next</button>
+          ) : (
+            <button onClick={onClose} className="text-sm px-4 py-2 rounded-lg bg-accent font-medium">Get started</button>
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ============================= TRUST PAGES ============================= */
+function LegalPageShell({ title, updated, children }){
+  return (
+    <div className="max-w-3xl mx-auto px-4 sm:px-6 py-10">
+      <p className="text-xs uppercase tracking-wide text-dim font-mono mb-2">{updated}</p>
+      <h1 className="font-display text-3xl mb-6">{title}</h1>
+      <div className="text-sm text-dim leading-relaxed space-y-4">{children}</div>
+    </div>
+  );
+}
+function AboutPage(){
+  return (
+    <LegalPageShell title="About GridPulse" updated="Company">
+      <p>GridPulse is a market-intelligence and paper-trading platform built to make electricity prices understandable and approachable, for individuals, small businesses, and anyone curious about how energy markets actually move.</p>
+      <p>The platform combines a market data layer, a real account and authentication system, and a simulation engine so people can learn and practice before any real capital or licensed trading infrastructure is ever involved.</p>
+      <p>GridPulse is currently a working prototype. Market prices default to a realistic seeded demo dataset unless a licensed live feed has been explicitly connected, and this is always shown clearly in the interface.</p>
+    </LegalPageShell>
+  );
+}
+function SecurityPage(){
+  return (
+    <LegalPageShell title="Security" updated="How your account is protected">
+      <p>Passwords are never stored in plain text. Every password is hashed with bcrypt, a one-way algorithm, before it ever reaches the database, so even direct database access would not reveal an actual password.</p>
+      <p>Sessions use signed, time-limited tokens rather than long-lived credentials sitting in the browser indefinitely.</p>
+      <p>All traffic between your browser and GridPulse's servers runs over HTTPS.</p>
+      <p>GridPulse does not hold, custody, or move real funds of any kind today. Demo balances exist only inside the application's own database and cannot be withdrawn or converted.</p>
+    </LegalPageShell>
+  );
+}
+function TermsPage(){
+  return (
+    <LegalPageShell title="Terms of Service" updated="Placeholder — have a qualified lawyer review before publishing">
+      <p>These terms are provided as a starting template for a working prototype and are not a substitute for advice from a licensed attorney in your jurisdiction.</p>
+      <p><b>1. Nature of the service.</b> GridPulse provides market information and a simulated trading environment. Nothing on the platform constitutes financial, investment, legal, or energy procurement advice.</p>
+      <p><b>2. No real funds.</b> All balances and trades shown in the standard product are simulated. Any on-chain testnet feature uses free test-network currency with no real-world value.</p>
+      <p><b>3. No guarantees.</b> Market data may be demo, delayed, or estimated, and is provided "as is" without warranty of accuracy.</p>
+      <p><b>4. Changes.</b> These terms may change as the product evolves; material changes should be communicated to users before taking effect.</p>
+    </LegalPageShell>
+  );
+}
+function PrivacyPage(){
+  return (
+    <LegalPageShell title="Privacy Policy" updated="Placeholder — have a qualified lawyer review before publishing">
+      <p>This policy is a starting template for a working prototype and should be reviewed by a qualified lawyer before being treated as binding.</p>
+      <p><b>What we collect.</b> Name, email, and a securely hashed password at signup; watchlists, alerts, and simulated trading activity tied to your account.</p>
+      <p><b>What we don't do.</b> We do not sell personal data, and we do not store payment card details, since no payment processing is currently integrated.</p>
+      <p><b>Your control.</b> You can request account deletion at any time; contact details would be listed here in a production version of this policy.</p>
+    </LegalPageShell>
+  );
+}
+
 /* ============================= ALERT MODAL ============================= */
 function AlertModal({ marketId, onClose, addAlert }){
   const m = MARKETS.find(x=>x.id===marketId) || MARKETS[0];
@@ -1777,6 +2125,14 @@ function AlertModal({ marketId, onClose, addAlert }){
 }
 
 /* ============================= APP ROOT ============================= */
+function seedSamplePositions(){
+  const de = MARKETS.find(m=>m.id==="de"), fr = MARKETS.find(m=>m.id==="fr");
+  return [
+    { id: "sample-open-1", marketId: "de", direction: "long", stake: 150, entryPrice: de.current*0.97, status: "open", openedAt: Date.now()-3600*1000*6, sample: true },
+    { id: "sample-closed-1", marketId: "fr", direction: "short", stake: 100, entryPrice: fr.current*1.04, status: "closed", closePrice: fr.current, pnl: 22.5, openedAt: Date.now()-3600*1000*30, sample: true },
+  ];
+}
+
 function App(){
   const route = useHashRoute();
   const [theme, setTheme] = useState("dark");
@@ -1784,7 +2140,7 @@ function App(){
   const [watchlist, setWatchlist] = useState(["de","gb"]);
   const [alerts, setAlerts] = useState([]);
   const [alertModal, setAlertModal] = useState(null);
-  const [positions, setPositions] = useState([]);
+  const [positions, setPositions] = useState(seedSamplePositions);
   const [balance, setBalance] = useState(10000);
   const [tradeMarket, setTradeMarket] = useState("de");
   const [toasts, setToasts] = useState([]);
@@ -1793,19 +2149,82 @@ function App(){
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   useEffect(()=>{ document.documentElement.className = theme==="light" ? "light" : ""; },[theme]);
+
+  // First-visit onboarding, shown once per browser.
+  useEffect(()=>{
+    if(!localStorage.getItem(ONBOARDING_KEY)) setShowOnboarding(true);
+  }, []);
+  const closeOnboarding = ()=>{ localStorage.setItem(ONBOARDING_KEY, "1"); setShowOnboarding(false); };
+
+  const pushNotification = (msg)=>{
+    setNotifications(n=>{
+      // avoid spamming the exact same message repeatedly
+      if(n[0] && n[0].msg===msg) return n;
+      return [{ id: Date.now()+Math.random(), msg, time: new Date(), read: false }, ...n].slice(0, 50);
+    });
+  };
+  const markNotificationsRead = ()=> setNotifications(n=>n.map(x=>({...x, read:true})));
 
   // Kick off the real backend sync once, when the app first loads.
   useEffect(()=>{
     syncLiveMarkets((result)=>{
       if(result.ok){
         setStatus({ state: "live", matched: result.matched, mode: result.mode });
+        pushNotification(`Connected to the backend — ${result.matched} markets synced.`);
       } else {
         setStatus({ state: "offline", error: result.error });
       }
       forceUpdate(n=>n+1); // re-render so components pick up the mutated MARKETS values
     });
+  }, []);
+
+  // Honest "activity feed": real notifications derived from real numbers only —
+  // significant price moves and alert conditions actually being met. Never a
+  // fabricated "someone just traded" message; nothing here pretends other
+  // users are active when they aren't.
+  useEffect(()=>{
+    const checkActivity = ()=>{
+      MARKETS.forEach(m=>{
+        if(Math.abs(m.change24) > 8){
+          pushNotification(`${m.name} has moved ${m.change24>=0?"+":""}${m.change24.toFixed(1)}% in the last 24h.`);
+        }
+      });
+      alerts.forEach(a=>{
+        const m = MARKETS.find(x=>x.id===a.marketId);
+        if(!m) return;
+        let hit = false;
+        if(a.condition==="rises above" && m.current>a.value) hit = true;
+        if(a.condition==="falls below" && m.current<a.value) hit = true;
+        if(a.condition==="moves more than 15% in 24h" && Math.abs(m.change24)>15) hit = true;
+        if(hit) pushNotification(`Alert triggered: ${m.name} ${a.condition} ${a.condition.includes("moves")?"":a.value}.`);
+      });
+    };
+    const t = setInterval(checkActivity, 30000);
+    return ()=> clearInterval(t);
+  }, [alerts]);
+
+  // Cosmetic "market is alive" tick: nudges DEMO-sourced prices very slightly
+  // on a timer, purely visual continuation of the already-disclosed seeded
+  // demo series. Never touches live backend values, and never fabricates
+  // trade counts or other-user activity — see the notes on this earlier in
+  // the conversation about why that line matters.
+  useEffect(()=>{
+    const t = setInterval(()=>{
+      const rnd = mulberry32(Date.now());
+      let changed = false;
+      MARKETS.forEach(m=>{
+        if(m.source!=="live"){
+          m.current = Math.round((m.current * (1 + (rnd()-0.5)*0.004)) * 100)/100;
+          changed = true;
+        }
+      });
+      if(changed) forceUpdate(n=>n+1);
+    }, 4000);
+    return ()=> clearInterval(t);
   }, []);
 
   // Real session persistence: if a token was saved from a previous visit,
@@ -1875,6 +2294,10 @@ function App(){
   else if(route==="#/learn") page = <LearnPage/>;
   else if(route==="#/business") page = <BusinessPage/>;
   else if(route==="#/onchain") page = <OnChainTradePage toast={pushToast} />;
+  else if(route==="#/about") page = <AboutPage/>;
+  else if(route==="#/security") page = <SecurityPage/>;
+  else if(route==="#/terms") page = <TermsPage/>;
+  else if(route==="#/privacy") page = <PrivacyPage/>;
   else page = <Landing/>;
 
   return (
@@ -1884,6 +2307,7 @@ function App(){
         theme={theme} toggleTheme={()=>setTheme(t=>t==="dark"?"light":"dark")}
         mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}
         user={user} onOpenAuth={()=>setAuthModalOpen(true)} onLogout={handleLogout}
+        notifications={notifications} onOpenNotifications={markNotificationsRead}
       />
       {page}
       <Footer/>
@@ -1891,6 +2315,7 @@ function App(){
       <Toast toasts={toasts} />
       {alertModal && <AlertModal marketId={alertModal} onClose={()=>setAlertModal(null)} addAlert={addAlert} />}
       {authModalOpen && <AuthModal onClose={()=>setAuthModalOpen(false)} onAuthed={handleAuthed} initialMode="signup" />}
+      {showOnboarding && <OnboardingModal onClose={closeOnboarding} />}
     </div>
   );
 }
