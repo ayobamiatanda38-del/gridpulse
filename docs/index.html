@@ -108,8 +108,15 @@ async function apiMe(token){
 // faucet, never real money. Replace CONTRACT_ADDRESS below with your real
 // deployed address once you've deployed GridPulseTestnetTrading.sol via
 // Remix — see the deployment guide for exact steps.
-const CONTRACT_ADDRESS = "0x41F2b632F06E2169D21C1bb9753421d9cC1fd94a"; // <-- replace after deploying
+const CONTRACT_ADDRESS = "0x41F2b632F06E2169D21C1bb9753421d9cC1fd94a";
 const SEPOLIA_CHAIN_ID = "0xaa36a7"; // 11155111 in hex
+const SEPOLIA_CHAIN_DECIMAL = 11155111;
+
+// Free project ID from cloud.reown.com (WalletConnect). This lets anyone
+// connect a mobile wallet by scanning a QR code, no browser extension
+// required — separate from the "Browser Extension" path used for MetaMask
+// on desktop.
+const WALLETCONNECT_PROJECT_ID = "de2da231b41a64ab946e0d5785758d63";
 
 const CONTRACT_ABI = [
   "function owner() view returns (address)",
@@ -143,9 +150,11 @@ async function ensureSepolia(){
   }
 }
 
+// Path 1: a browser extension wallet (MetaMask on desktop) injects itself
+// as window.ethereum. This only exists in the exact browser it's installed in.
 async function connectWallet(){
   if(!window.ethereum){
-    throw new Error("No wallet extension found. Install MetaMask from metamask.io, then try again.");
+    throw new Error("No wallet extension found in this browser. Install MetaMask from metamask.io, or use \"Scan with mobile wallet\" below instead.");
   }
   const provider = new ethers.BrowserProvider(window.ethereum);
   await provider.send("eth_requestAccounts", []);
@@ -154,6 +163,34 @@ async function connectWallet(){
   const address = await signer.getAddress();
   const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
   return { provider, signer, address, contract };
+}
+
+// Path 2: WalletConnect. Works from ANY browser, on desktop or mobile, with
+// no extension installed — it shows a QR code (or a deep link on mobile)
+// that any wallet app can scan to connect. Loaded on demand via a dynamic
+// import from esm.sh, since this project has no build step / bundler.
+let _wcProviderInstance = null;
+async function connectWalletConnect(){
+  const { EthereumProvider } = await import("https://esm.sh/@walletconnect/ethereum-provider@2.17.0");
+  const wcProvider = await EthereumProvider.init({
+    projectId: WALLETCONNECT_PROJECT_ID,
+    chains: [SEPOLIA_CHAIN_DECIMAL],
+    rpcMap: { [SEPOLIA_CHAIN_DECIMAL]: "https://rpc.sepolia.org" },
+    showQrModal: true,
+    metadata: {
+      name: "GridPulse",
+      description: "Electricity market intelligence and testnet trading",
+      url: "https://ayobamiatanda38-del.github.io/gridpulse/",
+      icons: ["https://ayobamiatanda38-del.github.io/gridpulse/favicon.ico"],
+    },
+  });
+  _wcProviderInstance = wcProvider;
+  await wcProvider.connect(); // opens the QR modal and waits for the wallet to approve
+  const provider = new ethers.BrowserProvider(wcProvider);
+  const signer = await provider.getSigner();
+  const address = await signer.getAddress();
+  const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+  return { provider, signer, address, contract, isWalletConnect: true };
 }
 
 function marketToBytes32(marketId){
@@ -188,6 +225,7 @@ const I = {
   arrowRight: <Icon path={<><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></>} />,
   info: <Icon path={<><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></>} />,
   trash: <Icon path={<><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></>} />,
+  qrcode: <Icon path={<><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3M14 18h3M18 14v3M21 21h-3v-3M21 14v.01M14 21h.01"/></>} />,
 };
 
 /* ============================= DEMO DATA ENGINE (used as fallback + chart/driver detail) ============================= */
@@ -1483,8 +1521,9 @@ function BusinessPage(){
 
 /* ============================= ON-CHAIN TRADING (TESTNET) ============================= */
 function OnChainTradePage({ toast }){
-  const [wallet, setWallet] = useState(null); // {address, provider, signer, contract}
+  const [wallet, setWallet] = useState(null); // {address, provider, signer, contract, isWalletConnect?}
   const [connecting, setConnecting] = useState(false);
+  const [connectingWC, setConnectingWC] = useState(false);
   const [error, setError] = useState("");
   const [marketId, setMarketId] = useState("de");
   const [onChainPrice, setOnChainPrice] = useState(null);
@@ -1497,17 +1536,33 @@ function OnChainTradePage({ toast }){
 
   const notDeployed = CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000";
 
+  const finishConnect = async (w)=>{
+    setWallet(w);
+    const ownerAddr = await w.contract.owner();
+    setIsOwner(ownerAddr.toLowerCase() === w.address.toLowerCase());
+    toast(`Wallet connected on the Sepolia test network${w.isWalletConnect ? " via WalletConnect" : ""}.`);
+  };
+
   const handleConnect = async ()=>{
     setError(""); setConnecting(true);
     try{
       const w = await connectWallet();
-      setWallet(w);
-      const ownerAddr = await w.contract.owner();
-      setIsOwner(ownerAddr.toLowerCase() === w.address.toLowerCase());
-      toast("Wallet connected on the Sepolia test network.");
+      await finishConnect(w);
     } catch(err){
       setError(err.message);
     } finally { setConnecting(false); }
+  };
+
+  const handleConnectMobile = async ()=>{
+    setError(""); setConnectingWC(true);
+    try{
+      const w = await connectWalletConnect();
+      await finishConnect(w);
+    } catch(err){
+      setError(err.message && err.message.toLowerCase().includes("rejected")
+        ? "Connection was cancelled or the QR code timed out. Try again."
+        : (err.message || "Couldn't start the WalletConnect session."));
+    } finally { setConnectingWC(false); }
   };
 
   useEffect(()=>{
@@ -1609,16 +1664,26 @@ function OnChainTradePage({ toast }){
       {!wallet ? (
         <div className="card p-6 text-center">
           <p className="text-dim text-sm mb-4">Connect a wallet to open or close on-chain testnet positions.</p>
-          <button onClick={handleConnect} disabled={connecting} className="bg-accent px-5 py-2.5 rounded-lg font-medium disabled:opacity-50">
-            {connecting ? "Connecting…" : "Connect Wallet"}
-          </button>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center items-stretch sm:items-center max-w-md mx-auto">
+            <button onClick={handleConnect} disabled={connecting || connectingWC} className="bg-accent px-5 py-2.5 rounded-lg font-medium disabled:opacity-50 flex-1">
+              {connecting ? "Connecting…" : "Browser Extension"}
+            </button>
+            <span className="text-dim text-xs">or</span>
+            <button onClick={handleConnectMobile} disabled={connecting || connectingWC} className="border border-hair px-5 py-2.5 rounded-lg font-medium disabled:opacity-50 flex-1 flex items-center justify-center gap-2">
+              {I.qrcode}
+              {connectingWC ? "Opening QR code…" : "Scan with Mobile Wallet"}
+            </button>
+          </div>
+          <p className="text-[11px] text-dim leading-relaxed mt-4 max-w-md mx-auto">
+            No extension installed? Use "Scan with Mobile Wallet", it works from any browser and connects to MetaMask, Trust Wallet, Rainbow, or any WalletConnect-compatible app on your phone.
+          </p>
           {error && <p className="text-neg text-xs mt-3">{error}</p>}
         </div>
       ) : (
         <>
           <div className="card p-4 mb-6 flex items-center justify-between flex-wrap gap-2">
             <div>
-              <p className="text-xs text-dim">Connected wallet</p>
+              <p className="text-xs text-dim">Connected wallet {wallet.isWalletConnect ? "(via WalletConnect)" : "(browser extension)"}</p>
               <p className="font-mono text-sm">{wallet.address.slice(0,6)}…{wallet.address.slice(-4)}</p>
             </div>
             <Tag tone="pos">Sepolia Testnet</Tag>
